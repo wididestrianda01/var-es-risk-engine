@@ -86,3 +86,26 @@ def test_traffic_light_frtb_red_975():
     """>30 breaches at 97.5% -> red even if 99% is fine."""
     result = traffic_light(breaches_99=5, breaches_975=35, total=250, framework="frtb2019")
     assert result["zone"] == "red"
+
+
+from src.backtest import acerbi_szekely_z2
+
+
+def test_acerbi_szekely_z2_correct_model():
+    """When ES forecasts are correct, Z₂ should not reject."""
+    rng = np.random.default_rng(42)
+    returns = rng.normal(0, 0.01, 500)
+    var_forecasts = np.full(500, np.percentile(returns, 5))
+    es_forecasts = np.full(500, returns[returns <= var_forecasts[0]].mean())
+    result = acerbi_szekely_z2(returns, var_forecasts, es_forecasts, alpha=0.95, n_sim=200)
+    assert result.p_value >= 0.01
+
+
+def test_acerbi_szekely_z2_bad_model():
+    """When ES forecasts are too optimistic, Z₂ should reject."""
+    rng = np.random.default_rng(42)
+    returns = rng.normal(0, 0.01, 500)
+    var_forecasts = np.full(500, np.percentile(returns, 5))
+    es_forecasts = np.full(500, -0.005)  # way too optimistic
+    result = acerbi_szekely_z2(returns, var_forecasts, es_forecasts, alpha=0.95, n_sim=200)
+    assert result.reject

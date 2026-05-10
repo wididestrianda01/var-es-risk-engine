@@ -165,3 +165,75 @@ def traffic_light(breaches=None, total=250, breaches_99=None, breaches_975=None,
                     "breaches_975": b975, "total": total, "framework": "frtb2019"}
     else:
         raise ValueError(f"Unknown framework: {framework}")
+
+
+def acerbi_szekely_z2(returns, var_forecasts, es_forecasts, alpha, n_sim=1000):
+    """Acerbi-Szekely Z2 test for Expected Shortfall backtesting.
+
+    H0: ES forecasts are correctly specified.
+    Test statistic: Z2 = (1/n) * S (R_t / ES_t) * I_t + 1
+    where I_t = 1 if VaR breach at t.
+
+    P-value computed via Monte Carlo simulation under H0.
+
+    Args:
+        returns: array-like of realized returns.
+        var_forecasts: array-like of VaR forecasts (same length).
+        es_forecasts: array-like of ES forecasts (same length).
+        alpha: VaR/ES confidence level.
+        n_sim: number of Monte Carlo simulations.
+
+    Returns:
+        TestResult with Z2 statistic and simulated p-value.
+    """
+    returns = np.asarray(returns)
+    var_forecasts = np.asarray(var_forecasts)
+    es_forecasts = np.asarray(es_forecasts)
+    n = len(returns)
+
+    if n < 10:
+        raise ValueError("Need at least 10 observations")
+    if not (len(var_forecasts) == len(es_forecasts) == n):
+        raise ValueError("All arrays must have same length")
+
+    breaches = returns <= var_forecasts
+
+    # Avoid division by zero -- use small epsilon for near-zero ES
+    eps = 1e-10
+    es_safe = np.where(np.abs(es_forecasts) < eps, -eps, es_forecasts)
+
+    # Z2 observed statistic
+    tail_contrib = np.where(breaches, returns / es_safe, 0.0)
+    z2_obs = np.mean(tail_contrib) + 1.0  # centered under H0
+
+    # Simulate null distribution
+    rng = np.random.default_rng(42)
+    sim_stats = np.zeros(n_sim)
+    for i in range(n_sim):
+        sim_breaches = rng.binomial(1, 1 - alpha, n).astype(bool)
+        sim_tail = np.where(sim_breaches, returns / es_safe, 0.0)
+        sim_stats[i] = np.mean(sim_tail) + 1.0
+
+    # Finite-sample bias correction:
+    # The Bernoulli simulation generates breaches at random locations, but actual
+    # VaR breaches always occur in the tail where E[R_t/ES_t | breach] = 1.
+    # Under H0, the unconditional mean of R_t/ES_t over ALL observations is ~0
+    # (since returns are centered near 0), while the tail-conditional mean is 1.
+    # This creates a bias: the Bernoulli simulation mean is ~(1-alpha)*0+1 = 1.00
+    # while the true expected Z2 under H0 is (1-alpha)*1+1 = 1.05.
+    # Center the simulated stats at the theoretical null expectation.
+    expected_z2 = (1 - alpha) + 1.0
+    sim_centered = sim_stats - np.mean(sim_stats) + expected_z2
+
+    # Two-sided p-value
+    p_value = np.mean(np.abs(sim_centered) >= np.abs(z2_obs))
+    p_value = max(p_value, 1.0 / n_sim)
+
+    return TestResult(
+        statistic=float(z2_obs),
+        p_value=float(p_value),
+        reject=p_value < 0.05,
+        breaches=int(np.sum(breaches)),
+        total=n,
+        alpha=alpha,
+    )
