@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 from src.var_methods import compute_var_es, VaRResult
 
 
@@ -32,8 +33,6 @@ def test_historical_var_different_alphas():
     assert var99.var <= var95.var
 
 
-import pytest
-
 
 def test_compute_var_rejects_invalid_alpha():
     returns = np.random.randn(100)
@@ -47,3 +46,14 @@ def test_compute_var_rejects_invalid_method():
     returns = np.random.randn(100)
     with pytest.raises(ValueError):
         compute_var_es(returns, method="crystal_ball", alpha=0.95)
+
+
+def test_compute_var_rejects_invalid_horizon():
+    returns = np.random.randn(100)
+    with pytest.raises(ValueError):
+        compute_var_es(returns, method="historical", alpha=0.95, horizon=0)
+
+
+def test_compute_var_rejects_short_returns():
+    with pytest.raises(ValueError):
+        compute_var_es(np.array([0.01]), method="historical", alpha=0.95)

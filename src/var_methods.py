@@ -52,8 +52,8 @@ def _historical_var_es(returns, alpha, horizon, garch_result):
         vol_scale = garch_result.cond_vol[-1] * np.sqrt(horizon)
 
     return VaRResult(
-        var=float(var_1d * np.sqrt(horizon)),
-        es=float(es_1d * np.sqrt(horizon)),
+        var=float(var_1d * vol_scale),
+        es=float(es_1d * vol_scale),
         method="historical",
         alpha=alpha,
         horizon=horizon,
