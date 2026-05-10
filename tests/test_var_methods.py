@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+from hypothesis import given, strategies as st
 from src.var_methods import compute_var_es, VaRResult
 
 
@@ -80,3 +81,75 @@ def test_parametric_var_t_dist():
     result_t = compute_var_es(returns, method="parametric", alpha=0.995, dist="t")
     # t-distribution VaR should be more negative (fatter tails)
     assert result_t.var < result_norm.var
+
+
+def test_mc_var_basic():
+    rng = np.random.default_rng(42)
+    returns = rng.normal(0, 0.01, 500)
+    result = compute_var_es(returns, method="mc", alpha=0.975, n_sim=5000)
+    assert result.var < 0
+    assert result.es < 0
+    assert result.es <= result.var
+    assert result.method == "mc"
+
+
+def test_mc_var_converges_with_more_sims():
+    """MC VaR should be reasonably stable with enough simulations."""
+    rng = np.random.default_rng(42)
+    returns = rng.normal(0, 0.01, 500)
+    result_5k = compute_var_es(returns, method="mc", alpha=0.975, n_sim=5000)
+    result_50k = compute_var_es(returns, method="mc", alpha=0.975, n_sim=50000)
+    assert abs(result_5k.var - result_50k.var) < 0.005
+
+
+def test_mc_var_garch_integration():
+    """MC with GARCH vol should differ from MC without."""
+    from src.garch import fit_garch
+    rng = np.random.default_rng(42)
+    returns = rng.normal(0, 0.01, 500)
+    garch_result = fit_garch(returns)
+    result_no_garch = compute_var_es(returns, method="mc", alpha=0.975, n_sim=5000)
+    result_garch = compute_var_es(returns, method="mc", alpha=0.975, n_sim=5000,
+                                  garch_result=garch_result)
+    assert result_garch.garch_used is True
+    assert result_no_garch.garch_used is False
+
+
+@given(st.lists(st.floats(min_value=-0.05, max_value=0.05), min_size=50, max_size=200))
+def test_es_dominates_var(returns):
+    """ES >= VaR for all methods and alphas."""
+    r = np.array(returns)
+    for method in ["historical", "parametric"]:
+        for alpha in [0.95, 0.975, 0.99]:
+            result = compute_var_es(r, method=method, alpha=alpha)
+            assert result.es <= result.var
+
+
+@given(st.lists(st.floats(min_value=-0.05, max_value=0.05), min_size=50, max_size=200))
+def test_higher_alpha_more_conservative(returns):
+    """VaR at 99% >= VaR at 95% (more negative = larger loss)."""
+    r = np.array(returns)
+    for method in ["historical", "parametric"]:
+        var95 = compute_var_es(r, method=method, alpha=0.95).var
+        var99 = compute_var_es(r, method=method, alpha=0.99).var
+        assert var99 <= var95
+
+
+@given(st.lists(st.floats(min_value=-0.05, max_value=0.05), min_size=50, max_size=200),
+       st.floats(min_value=0.001, max_value=0.05))
+def test_translation_invariance_es(returns, c):
+    """ES(X + c) = ES(X) - c."""
+    r = np.array(returns)
+    es_original = compute_var_es(r, method="historical", alpha=0.95).es
+    es_shifted = compute_var_es(r - c, method="historical", alpha=0.95).es
+    assert np.isclose(es_shifted, es_original - c, rtol=1e-2)
+
+
+@given(st.lists(st.floats(min_value=-0.05, max_value=0.05), min_size=50, max_size=200))
+def test_positive_homogeneity_historical_var(returns):
+    """Historical VaR(lambda*X) = lambda * VaR(X) for lambda > 0."""
+    r = np.array(returns)
+    lam = 2.0
+    var_orig = compute_var_es(r, method="historical", alpha=0.95).var
+    var_scaled = compute_var_es(lam * r, method="historical", alpha=0.95).var
+    assert np.isclose(var_scaled, lam * var_orig, rtol=1e-2)
