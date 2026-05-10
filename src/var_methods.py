@@ -27,7 +27,8 @@ def compute_var_es(returns, method, alpha, horizon=1, garch_result=None, dist="n
     Returns:
         VaRResult with var, es, and metadata.
     """
-    returns = np.asarray(returns, dtype=float)
+    returns = np.asarray(returns, dtype=float).ravel()
+    returns = returns[np.isfinite(returns)]
 
     if alpha <= 0 or alpha >= 1:
         raise ValueError(f"alpha must be in (0, 1), got {alpha}")

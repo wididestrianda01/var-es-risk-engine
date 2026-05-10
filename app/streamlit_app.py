@@ -51,12 +51,25 @@ def load_data(ticker, start, end):
     return prices, returns
 
 
-prices, returns = load_data(ticker, *date_range)
+try:
+    prices, returns = load_data(ticker, *date_range)
+    garch_result = fit_garch(returns) if use_garch else None
+    result = compute_var_es(
+        returns, method=method, alpha=alpha, horizon=horizon, garch_result=garch_result
+    )
+    data_ok = True
+except Exception as exc:
+    data_ok = False
+    error_msg = str(exc)
+    st.error(f"**Data Error:** {error_msg}")
+    st.info(
+        "Try a different ticker (e.g. AAPL, MSFT) or a narrower date range. "
+        "Some symbols (^OMX, ^GSPC) may be unavailable from Yahoo Finance "
+        "depending on your region."
+    )
 
-garch_result = fit_garch(returns) if use_garch else None
-result = compute_var_es(
-    returns, method=method, alpha=alpha, horizon=horizon, garch_result=garch_result
-)
+if not data_ok:
+    st.stop()
 
 # ── Tabs ─────────────────────────────────────────────────────────────────────
 

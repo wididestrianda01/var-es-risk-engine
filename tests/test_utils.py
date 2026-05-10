@@ -33,18 +33,19 @@ class TestComputeReturns:
             compute_returns(prices, method="invalid")
 
     def test_compute_returns_single_price(self):
-        """Single price means no returns — expect empty array."""
-        result = compute_returns(np.array([100.0]), method="log")
-        assert len(result) == 0
+        """Single price yields no valid returns — expect ValueError."""
+        with pytest.raises(ValueError, match="Only 0 valid returns"):
+            compute_returns(np.array([100.0]), method="log")
 
     def test_compute_returns_with_nan(self):
-        """NaN in prices should propagate as NaN in returns."""
-        prices = np.array([100.0, np.nan, 102.0])
+        """NaN in prices should be stripped, not propagated."""
+        prices = np.array([100.0, 101.0, np.nan, 102.0, 103.0, 104.0])
         result = compute_returns(prices, method="log")
-        assert np.isnan(result).any()
+        assert not np.isnan(result).any()
+        assert len(result) >= 2
 
     def test_compute_returns_zero_or_negative_price(self):
-        """Zero or negative prices produce invalid log — returns should contain inf/nan."""
+        """Zero or negative prices should raise ValueError."""
         prices = np.array([100.0, 0.0, 50.0])
-        result = compute_returns(prices, method="log")
-        assert np.isinf(result).any() or np.isnan(result).any()
+        with pytest.raises(ValueError, match="strictly positive"):
+            compute_returns(prices, method="log")

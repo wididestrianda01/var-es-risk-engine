@@ -61,7 +61,8 @@ def fit_garch(
     ValueError
         If the series is too short (<100 observations).
     """
-    returns = np.asarray(returns, dtype=float)
+    returns = np.asarray(returns, dtype=float).ravel()
+    returns = returns[np.isfinite(returns)]
     if len(returns) < 100:
         raise ValueError(
             f"Need at least 100 observations, got {len(returns)}"

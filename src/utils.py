@@ -27,11 +27,27 @@ def compute_returns(prices, method="log"):
         If method is not "log" or "simple".
     """
     prices = np.asarray(prices, dtype=float)
+
+    if prices.ndim == 2 and prices.shape[1] == 1:
+        prices = prices.ravel()
+
+    if np.any(prices <= 0):
+        raise ValueError("Prices must be strictly positive for return computation")
+
     if method == "log":
-        return np.diff(np.log(prices))
-    if method == "simple":
-        return np.diff(prices) / prices[:-1]
-    raise ValueError(f"Unknown method: {method}")
+        log_prices = np.log(prices)
+        rets = np.diff(log_prices)
+    elif method == "simple":
+        rets = np.diff(prices) / prices[:-1]
+    else:
+        raise ValueError(f"Unknown method: {method}")
+
+    rets = rets[np.isfinite(rets)]
+    if len(rets) < 2:
+        raise ValueError(
+            f"Only {len(rets)} valid returns after cleaning — need at least 2"
+        )
+    return rets
 
 
 def fetch_prices(tickers, start, end):
