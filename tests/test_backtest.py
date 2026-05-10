@@ -29,3 +29,22 @@ def test_kupiec_validation():
     """breaches > total should raise."""
     with pytest.raises(ValueError):
         kupiec_test(breaches=300, total=250, alpha=0.99)
+
+
+from src.backtest import christoffersen_test
+
+
+def test_christoffersen_independent_breaches():
+    """Randomly distributed breaches should NOT reject independence."""
+    rng = np.random.default_rng(42)
+    breaches = rng.choice([0, 1], size=250, p=[0.99, 0.01])
+    result = christoffersen_test(breaches)
+    assert isinstance(result, TestResult)
+
+
+def test_christoffersen_clustered_breaches():
+    """Clustered breaches should reject independence."""
+    breaches = np.zeros(250, dtype=int)
+    breaches[100:130] = 1  # 30 consecutive breaches — clearly clustered
+    result = christoffersen_test(breaches)
+    assert result.reject
