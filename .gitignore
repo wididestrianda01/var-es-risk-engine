@@ -8,3 +8,6 @@ dist/
 .ruff_cache/
 .superpowers/
 
+docs
+P1_VaR_ES_Reference.md
+ruvector.db
