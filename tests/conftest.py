@@ -1,4 +1,5 @@
-# tests/conftest.py
+"""Hypothesis profiles and shared fixtures for var-es tests."""
+
 import os
 import numpy as np
 import pytest
@@ -19,16 +20,16 @@ settings.load_profile(os.getenv("HYPOTHESIS_PROFILE", "dev"))
 
 
 @pytest.fixture
-def sample_returns():
+def sample_returns() -> np.ndarray:
     """252 days of synthetic daily returns for tests."""
     rng = np.random.default_rng(42)
     return rng.normal(0, 0.01, 252)
 
 
 @pytest.fixture
-def sample_prices():
+def sample_prices() -> np.ndarray:
     """252 days of synthetic prices starting at 100."""
-    rng = np.random.default_rng(42)
+    rng = np.random.default_rng(43)
     returns = rng.normal(0, 0.01, 251)
     prices = [100.0]
     for r in returns:
