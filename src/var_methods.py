@@ -50,17 +50,21 @@ def compute_var_es(returns, method, alpha, horizon=1, garch_result=None, dist="n
 
 
 def _historical_var_es(returns, alpha, horizon, garch_result):
-    var_1d = np.percentile(returns, (1 - alpha) * 100)
-    tail = returns[returns <= var_1d]
+    if garch_result is not None and len(garch_result.cond_vol) > 0:
+        cond_vol = max(garch_result.cond_vol[-1], 1e-10)
+        hist_vol = np.std(returns, ddof=1)
+        hist_vol = max(hist_vol, 1e-10)
+        scaled = returns * (cond_vol / hist_vol)
+    else:
+        scaled = returns
+
+    var_1d = np.percentile(scaled, (1 - alpha) * 100)
+    tail = scaled[scaled <= var_1d]
     es_1d = tail.mean() if len(tail) > 0 else var_1d
 
-    vol_scale = np.sqrt(horizon)
-    if garch_result is not None and len(garch_result.cond_vol) > 0:
-        vol_scale = garch_result.cond_vol[-1] * np.sqrt(horizon)
-
     return VaRResult(
-        var=float(var_1d * vol_scale),
-        es=float(es_1d * vol_scale),
+        var=float(var_1d * np.sqrt(horizon)),
+        es=float(es_1d * np.sqrt(horizon)),
         method="historical",
         alpha=alpha,
         horizon=horizon,
@@ -108,12 +112,13 @@ def _parametric_var_es(returns, alpha, horizon, garch_result, dist):
 
 def _mc_var_es(returns, alpha, horizon, garch_result, n_sim):
     mu = np.mean(returns)
-    sigma = np.std(returns, ddof=1)
+    sigma_daily = np.std(returns, ddof=1)
 
     if garch_result is not None and len(garch_result.cond_vol) > 0:
-        sigma = garch_result.cond_vol[-1]
+        sigma_daily = garch_result.cond_vol[-1]
 
-    dt = horizon / 252  # trading days
+    sigma_annual = sigma_daily * np.sqrt(252)
+    dt = horizon / 252  # years
     rng = np.random.default_rng(42)
 
     # Antithetic variates for variance reduction
@@ -122,8 +127,8 @@ def _mc_var_es(returns, alpha, horizon, garch_result, n_sim):
     z = np.concatenate([z, -z])
 
     # GBM: S_T = S_0 * exp((mu - 0.5*sigma^2)*T + sigma*sqrt(T)*z)
-    drift = (mu - 0.5 * sigma**2) * dt
-    diffusion = sigma * np.sqrt(dt) * z
+    drift = (mu - 0.5 * sigma_annual**2) * dt
+    diffusion = sigma_annual * np.sqrt(dt) * z
     simulated_returns = drift + diffusion
 
     # Clip extreme returns to +/-50% daily

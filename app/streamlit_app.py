@@ -180,7 +180,15 @@ with tab3:
     st.header("Backtesting")
 
     est_window = 500
+    if len(returns) < est_window:
+        st.warning(
+            f"Need at least {est_window} observations for backtesting "
+            f"(have {len(returns)}). Select a wider date range."
+        )
+        st.stop()
+
     var_fc, es_fc, real = [], [], []
+    var_fc_975 = []
 
     for t in range(est_window, len(returns)):
         train = returns[t - est_window : t]
@@ -189,11 +197,16 @@ with tab3:
         var_fc.append(r.var)
         es_fc.append(r.es)
         real.append(returns[t])
+        # FRTB: also track 97.5% VaR breaches
+        r_975 = compute_var_es(train, method=method, alpha=0.975, garch_result=g)
+        var_fc_975.append(r_975.var)
 
     var_arr = np.array(var_fc)
     es_arr = np.array(es_fc)
     ret_arr = np.array(real)
+    var_975_arr = np.array(var_fc_975)
     breaches = (ret_arr <= var_arr).astype(int)
+    breaches_975 = (ret_arr <= var_975_arr).astype(int)
 
     k_test = kupiec_test(breaches.sum(), len(breaches), alpha)
     c_test = christoffersen_test(breaches)
@@ -201,7 +214,7 @@ with tab3:
     tl_basel = traffic_light(breaches.sum(), len(breaches), framework="basel1996")
     tl_frtb = traffic_light(
         breaches_99=breaches.sum(),
-        breaches_975=breaches.sum(),
+        breaches_975=breaches_975.sum(),
         total=len(breaches),
         framework="frtb2019",
     )
@@ -223,6 +236,7 @@ with tab3:
     c2.metric(
         "FRTB 2019",
         f"{color[tl_frtb['zone']]} {tl_frtb['zone']}",
+        delta=f"99%: {breaches.sum()}  |  97.5%: {breaches_975.sum()}",
     )
 
     fig = go.Figure()

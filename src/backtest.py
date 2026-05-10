@@ -100,18 +100,27 @@ def christoffersen_test(breaches):
         )
 
     # Unrestricted probabilities
-    pi0 = n01 / n0
-    pi1 = n11 / n1
+    pi0 = n01 / n0 if n0 > 0 else 0.0
+    pi1 = n11 / n1 if n1 > 0 else 0.0
     pi = (n01 + n11) / n
 
+    def _safe_xlog(x, y):
+        if x == 0:
+            return 0.0
+        if y <= 0 or y >= 1:
+            return 0.0
+        return x * np.log(y)
+
     # Independence LR test
-    # LR = -2 * ln(L(restricted) / L(unrestricted))
-    lr_ind = -2 * (
-        (n00 * np.log(1 - pi) + n01 * np.log(pi)
-         + n10 * np.log(1 - pi) + n11 * np.log(pi))
-        - (n00 * np.log(1 - pi0) + n01 * np.log(pi0)
-           + n10 * np.log(1 - pi1) + n11 * np.log(pi1))
+    ll_restricted = (
+        _safe_xlog(n00, 1 - pi) + _safe_xlog(n01, pi)
+        + _safe_xlog(n10, 1 - pi) + _safe_xlog(n11, pi)
     )
+    ll_unrestricted = (
+        _safe_xlog(n00, 1 - pi0) + _safe_xlog(n01, pi0)
+        + _safe_xlog(n10, 1 - pi1) + _safe_xlog(n11, pi1)
+    )
+    lr_ind = -2 * (ll_restricted - ll_unrestricted)
 
     lr_ind = max(lr_ind, 0)
     p_value = 1 - stats.chi2.cdf(lr_ind, df=1)
