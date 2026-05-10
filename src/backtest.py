@@ -124,3 +124,44 @@ def christoffersen_test(breaches):
         total=n,
         alpha=np.nan,
     )
+
+
+def traffic_light(breaches=None, total=250, breaches_99=None, breaches_975=None,
+                  framework="basel1996"):
+    """Basel traffic light system for backtesting.
+
+    Args:
+        breaches: number of breaches (Basel 1996: at 99% VaR).
+        total: total observations (default 250).
+        breaches_99: FRTB 2019: breaches at 99% VaR.
+        breaches_975: FRTB 2019: breaches at 97.5% VaR.
+        framework: "basel1996" or "frtb2019".
+
+    Returns:
+        dict with zone, multiplier (Basel 1996 only), breaches counts.
+    """
+    if framework == "basel1996":
+        if breaches is None:
+            raise ValueError("breaches is required for basel1996")
+        if breaches <= 4:
+            return {"zone": "green", "multiplier": 3.0, "breaches": breaches,
+                    "total": total, "framework": "basel1996"}
+        elif breaches <= 9:
+            k = 3.40 + (breaches - 5) * (0.45 / 4)
+            return {"zone": "yellow", "multiplier": round(k, 2),
+                    "breaches": breaches, "total": total, "framework": "basel1996"}
+        else:
+            return {"zone": "red", "multiplier": 4.0, "breaches": breaches,
+                    "total": total, "framework": "basel1996"}
+
+    elif framework == "frtb2019":
+        b99 = breaches_99 if breaches_99 is not None else breaches
+        b975 = breaches_975 if breaches_975 is not None else breaches
+        if b99 <= 12 and b975 <= 30:
+            return {"zone": "green", "breaches_99": b99,
+                    "breaches_975": b975, "total": total, "framework": "frtb2019"}
+        else:
+            return {"zone": "red", "breaches_99": b99,
+                    "breaches_975": b975, "total": total, "framework": "frtb2019"}
+    else:
+        raise ValueError(f"Unknown framework: {framework}")

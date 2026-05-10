@@ -48,3 +48,41 @@ def test_christoffersen_clustered_breaches():
     breaches[100:130] = 1  # 30 consecutive breaches — clearly clustered
     result = christoffersen_test(breaches)
     assert result.reject
+
+
+from src.backtest import traffic_light
+
+
+def test_traffic_light_basel1996_green():
+    result = traffic_light(breaches=3, total=250, framework="basel1996")
+    assert result["zone"] == "green"
+    assert result["multiplier"] == 3.0
+
+
+def test_traffic_light_basel1996_yellow():
+    result = traffic_light(breaches=7, total=250, framework="basel1996")
+    assert result["zone"] == "yellow"
+    assert 3.4 <= result["multiplier"] <= 3.85
+
+
+def test_traffic_light_basel1996_red():
+    result = traffic_light(breaches=12, total=250, framework="basel1996")
+    assert result["zone"] == "red"
+    assert result["multiplier"] == 4.0
+
+
+def test_traffic_light_frtb_green():
+    result = traffic_light(breaches_99=10, breaches_975=25, total=250, framework="frtb2019")
+    assert result["zone"] == "green"
+
+
+def test_traffic_light_frtb_red_99():
+    """>12 breaches at 99% -> red even if 97.5% is fine."""
+    result = traffic_light(breaches_99=15, breaches_975=5, total=250, framework="frtb2019")
+    assert result["zone"] == "red"
+
+
+def test_traffic_light_frtb_red_975():
+    """>30 breaches at 97.5% -> red even if 99% is fine."""
+    result = traffic_light(breaches_99=5, breaches_975=35, total=250, framework="frtb2019")
+    assert result["zone"] == "red"
