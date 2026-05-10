@@ -1,7 +1,8 @@
 import numpy as np
 import pytest
 from hypothesis import given, strategies as st
-from src.var_methods import compute_var_es, VaRResult
+import pandas as pd
+from src.var_methods import compute_var_es, compute_portfolio_var_es, VaRResult
 
 
 def test_historical_var_es_basic():
@@ -153,3 +154,38 @@ def test_positive_homogeneity_historical_var(returns):
     var_orig = compute_var_es(r, method="historical", alpha=0.95).var
     var_scaled = compute_var_es(lam * r, method="historical", alpha=0.95).var
     assert np.isclose(var_scaled, lam * var_orig, rtol=1e-2)
+
+
+def test_portfolio_var_es_2_assets():
+    rng = np.random.default_rng(42)
+    returns = pd.DataFrame({
+        "A": rng.normal(0, 0.01, 500),
+        "B": rng.normal(0, 0.015, 500),
+    })
+    weights = np.array([0.6, 0.4])
+    result = compute_portfolio_var_es(returns, weights, method="historical", alpha=0.975)
+    assert result.var < 0
+    assert result.es < 0
+    assert result.es <= result.var
+
+
+def test_portfolio_var_es_diversification():
+    """Portfolio ES should benefit from diversification."""
+    rng = np.random.default_rng(42)
+    returns = pd.DataFrame({
+        "A": rng.normal(0, 0.01, 500),
+        "B": rng.normal(0, 0.015, 500),
+    })
+    weights = np.array([0.5, 0.5])
+    result = compute_portfolio_var_es(returns, weights, method="historical", alpha=0.975)
+    es_a = compute_var_es(returns["A"].values, method="historical", alpha=0.975).es
+    es_b = compute_var_es(returns["B"].values, method="historical", alpha=0.975).es
+    weighted_sum = 0.5 * abs(es_a) + 0.5 * abs(es_b)
+    assert abs(result.es) <= weighted_sum + 1e-6
+
+
+def test_portfolio_var_weights_sum_to_one():
+    """Weights must sum to 1."""
+    returns = pd.DataFrame({"A": np.random.randn(100), "B": np.random.randn(100)})
+    with pytest.raises(ValueError):
+        compute_portfolio_var_es(returns, np.array([0.5, 0.3]), method="historical", alpha=0.95)
