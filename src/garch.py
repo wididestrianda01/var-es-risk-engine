@@ -7,7 +7,7 @@ import numpy as np
 from arch import arch_model
 
 
-__all__ = ["GarchResult", "fit_garch"]
+__all__ = ["GarchResult", "fit_garch", "forecast_vol"]
 
 
 @dataclass
@@ -83,3 +83,27 @@ def fit_garch(
         aic=aic,
         bic=bic,
     )
+
+
+def forecast_vol(result: GarchResult, horizon: int = 1) -> np.ndarray:
+    """Forecast volatility from a fitted GarchResult.
+
+    Uses the square-root-of-time rule scaled from the last conditional
+    volatility estimate.
+
+    Parameters
+    ----------
+    result : GarchResult
+        Fitted model result.
+    horizon : int, optional
+        Forecast horizon in days (default 1).
+
+    Returns
+    -------
+    np.ndarray
+        Volatility forecast for the given horizon.
+    """
+    if result.cond_vol is None or len(result.cond_vol) == 0:
+        raise ValueError("No conditional volatility in result")
+    last_vol = result.cond_vol[-1]
+    return last_vol * np.sqrt(horizon)
