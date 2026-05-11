@@ -18,6 +18,16 @@ from src.stress_test import find_worst_window, run_historical_scenario
 from src.utils import compute_returns, fetch_prices
 from src.var_methods import compute_var_es
 
+# ── Constants: Swedish equity universe (aligned with notebooks) ──────────
+
+ASSETS = ["^OMX", "ERIC-B.ST", "VOLV-B.ST", "HM-B.ST", "SWED-A.ST"]
+NAMES  = ["OMXS30", "Ericsson", "Volvo", "H&M", "Swedbank"]
+SECTORS = ["Broad Market Index", "Telecom Equipment", "Industrial / Automotive",
+           "Consumer Retail", "Financial / Banking"]
+NAME_MAP = dict(zip(ASSETS, NAMES))
+SECTOR_MAP = dict(zip(ASSETS, SECTORS))
+ALPHAS = [0.95, 0.975, 0.99]
+
 st.set_page_config(page_title="VaR & ES Engine", layout="wide")
 st.title("VaR & Expected Shortfall Risk Engine")
 st.caption("FRTB-aligned | Basel III | Multi-asset risk analytics")
@@ -27,7 +37,9 @@ st.caption("FRTB-aligned | Basel III | Multi-asset risk analytics")
 with st.sidebar:
     st.header("Controls")
     ticker = st.selectbox(
-        "Asset", ["^OMX", "^GSPC", "AAPL", "MSFT", "EURSEK=X"]
+        "Asset",
+        ASSETS,
+        format_func=lambda x: f"{NAME_MAP[x]} ({x})  — {SECTOR_MAP[x]}"
     )
     alpha = st.selectbox(
         "Confidence Level",
@@ -51,21 +63,182 @@ def load_data(ticker, start, end):
     return prices, returns
 
 
+# ── Plot Helper Functions ──────────────────────────────────────────────────
+
+def _plot_distribution_overlay(returns, result, alpha):
+    """Normal PDF vs Student-t PDF vs empirical histogram with VaR line."""
+    from scipy import stats as sp_stats
+    fig = go.Figure()
+    fig.add_trace(go.Histogram(
+        x=returns, nbinsx=60, histnorm="probability density",
+        name="Empirical", marker_color="lightblue", opacity=0.6
+    ))
+    x_range = np.linspace(returns.min(), returns.max(), 200)
+    mu, sigma = np.mean(returns), np.std(returns, ddof=1)
+    fig.add_trace(go.Scatter(
+        x=x_range, y=sp_stats.norm.pdf(x_range, mu, sigma),
+        name="Normal Fit", line=dict(color="orange", dash="dash")
+    ))
+    df_t, loc_t, scale_t = sp_stats.t.fit(returns)
+    fig.add_trace(go.Scatter(
+        x=x_range, y=sp_stats.t.pdf(x_range, df_t, loc_t, scale_t),
+        name=f"Student-t Fit (ν={df_t:.1f})",
+        line=dict(color="green", dash="dot")
+    ))
+    fig.add_vline(x=result.var, line_dash="dash", line_color="red",
+                  annotation_text=f"VaR {alpha:.1%}")
+    fig.update_layout(
+        title="Return Distribution: Empirical vs Theoretical Fits",
+        xaxis_title="Log Return", yaxis_title="Density",
+        bargap=0.05
+    )
+    return fig
+
+
+def _plot_conditional_vol(returns_series, garch_result, ticker_name):
+    """Conditional volatility time series with crisis annotations."""
+    fig = go.Figure()
+    date_index = pd.date_range(end=pd.Timestamp.today(), periods=len(garch_result.cond_vol), freq="B")
+    fig.add_trace(go.Scatter(
+        x=date_index[-len(garch_result.cond_vol):],
+        y=garch_result.cond_vol,
+        name="Conditional Volatility",
+        line=dict(color="steelblue", width=1.5)
+    ))
+    # COVID-19 shaded region
+    fig.add_vrect(
+        x0="2020-02-19", x1="2020-03-23",
+        fillcolor="red", opacity=0.1,
+        annotation_text="COVID-19 Crash"
+    )
+    fig.update_layout(
+        title=f"GARCH Conditional Volatility — {ticker_name}",
+        xaxis_title="Date", yaxis_title="Daily Volatility"
+    )
+    return fig
+
+
+def _plot_qq_residuals(std_residuals, dist_name, ticker_name):
+    """QQ plot of standardized residuals against theoretical distribution."""
+    from scipy import stats as sp_stats
+    fig = go.Figure()
+    n = len(std_residuals)
+    theoretical = sp_stats.norm.ppf((np.arange(1, n + 1) - 0.5) / n)
+    fig.add_trace(go.Scatter(
+        x=theoretical, y=np.sort(std_residuals),
+        mode="markers", name="Residuals",
+        marker=dict(color="steelblue", size=4, opacity=0.5)
+    ))
+    lo, hi = theoretical.min(), theoretical.max()
+    fig.add_trace(go.Scatter(
+        x=[lo, hi], y=[lo, hi],
+        name="Normal Reference", line=dict(color="red", dash="dash")
+    ))
+    fig.update_layout(
+        title=f"QQ Plot of Standardized Residuals — {ticker_name} ({dist_name})",
+        xaxis_title="Theoretical Quantiles (Normal)",
+        yaxis_title="Sample Quantiles"
+    )
+    return fig
+
+
+def _plot_half_life_comparison(half_lives, asset_names):
+    """Horizontal bar chart comparing volatility half-life across assets."""
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        y=asset_names, x=half_lives, orientation="h",
+        marker_color="steelblue", text=[f"{h:.0f} days" for h in half_lives],
+        textposition="outside"
+    ))
+    fig.update_layout(
+        title="Volatility Half-Life Comparison",
+        xaxis_title="Half-Life (Trading Days)",
+        yaxis_title="",
+        xaxis=dict(range=[0, max(half_lives) * 1.3])
+    )
+    return fig
+
+
+def _plot_breach_timeline(ret_arr, breaches_99, breaches_975):
+    """Breach timeline with dual-condition overlay (FRTB-style)."""
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        y=ret_arr, name="Returns", line=dict(color="gray", width=0.5)
+    ))
+    idx_99 = np.where(breaches_99)[0]
+    idx_975 = np.where(breaches_975)[0]
+    fig.add_trace(go.Scatter(
+        x=idx_99, y=ret_arr[idx_99],
+        mode="markers", name="99% VaR Breaches",
+        marker=dict(color="red", size=8, symbol="x")
+    ))
+    idx_975_only = np.setdiff1d(idx_975, idx_99)
+    fig.add_trace(go.Scatter(
+        x=idx_975_only, y=ret_arr[idx_975_only],
+        mode="markers", name="97.5% VaR Breaches",
+        marker=dict(color="orange", size=6, symbol="triangle-up")
+    ))
+    fig.update_layout(
+        title="FRTB Dual-Condition Breach Map (99% + 97.5%)",
+        xaxis_title="Forecast Day", yaxis_title="Return"
+    )
+    return fig
+
+
+def _plot_scenario_waterfall(scenarios_dict, baseline_var):
+    """Waterfall chart: baseline VaR → crisis scenarios → worst window."""
+    names = ["Baseline"]
+    values = [abs(baseline_var)]
+    for label, r in scenarios_dict.items():
+        names.append(label)
+        values.append(abs(r.var))
+    fig = go.Figure(go.Waterfall(
+        name="VaR Magnitude", orientation="v",
+        measure=["absolute"] + ["relative"] * len(scenarios_dict),
+        x=names, y=values,
+        connector=dict(line=dict(color="gray", dash="dot")),
+        increasing=dict(marker_color="darkred"),
+        decreasing=dict(marker_color="steelblue"),
+        totals=dict(marker_color="maroon")
+    ))
+    fig.update_layout(
+        title="Stress Scenario Waterfall: VaR Magnitude Escalation",
+        yaxis_title="|VaR| (Daily Loss)"
+    )
+    return fig
+
+
 try:
     prices, returns = load_data(ticker, *date_range)
     garch_result = fit_garch(returns) if use_garch else None
+
+    # Grid search for Model Deep-Dive tab (single asset)
+    from src.garch import fit_garch_grid
+    garch_grid_result = fit_garch_grid(returns) if use_garch else None
+
+    # VaR/ES for selected alpha (primary)
     result = compute_var_es(
-        returns, method=method, alpha=alpha, horizon=horizon, garch_result=garch_result
+        returns, method=method, alpha=alpha, horizon=horizon,
+        garch_result=garch_result
     )
+
+    # VaR/ES at all three confidence levels (for multi-alpha charts)
+    alpha_results = {}
+    for a in ALPHAS:
+        g = garch_result if method != "historical" else None
+        alpha_results[a] = compute_var_es(
+            returns, method=method, alpha=a, garch_result=g
+        )
+
     data_ok = True
 except Exception as exc:
     data_ok = False
     error_msg = str(exc)
     st.error(f"**Data Error:** {error_msg}")
     st.info(
-        "Try a different ticker (e.g. AAPL, MSFT) or a narrower date range. "
-        "Some symbols (^OMX, ^GSPC) may be unavailable from Yahoo Finance "
-        "depending on your region."
+        "Try a different ticker or a narrower date range. "
+        "Swedish equities (Ericsson, Volvo, H&M, Swedbank) use "
+        "Yahoo Finance Stockholm suffix (.ST)."
     )
 
 if not data_ok:
