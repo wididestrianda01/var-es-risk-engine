@@ -5,7 +5,7 @@
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Streamlit](https://img.shields.io/badge/dashboard-streamlit-red)](https://streamlit.io/)
 
-A multi-asset risk engine that computes Value at Risk (VaR) via three methods — Historical, Parametric, and Monte Carlo — alongside Expected Shortfall (ES), backed by GARCH volatility modeling and regulatory backtesting against Basel Committee standards.
+A multi-asset risk engine that computes Value at Risk (VaR) via three methods (Historical, Parametric, Monte Carlo) alongside Expected Shortfall (ES), backed by GARCH volatility modeling and regulatory backtesting against Basel Committee standards.
 
 ![Dashboard](img/overview.png)
 
@@ -30,17 +30,17 @@ This project is a market risk engine built to the standards expected of a Risk A
 
 The loss that will not be exceeded with probability $1 - \alpha$ over a holding period $h$:
 
-$$\text{VaR}_{\alpha} = \inf\{l \in \mathbb{R} : P(L > l) \leq 1 - \alpha\}$$
+$$\mathrm{VaR}_{\alpha} = \inf\{l \in \mathbb{R} : P(L > l) \leq 1 - \alpha\}$$
 
 ### Expected Shortfall (ES / CVaR)
 
 The mean loss conditional on exceeding VaR:
 
-$$\text{ES}_{\alpha} = \mathbb{E}[L \mid L > \text{VaR}_{\alpha}]$$
+$$\mathrm{ES}_{\alpha} = \mathbb{E}[L \mid L > \mathrm{VaR}_{\alpha}]$$
 
 ### Why ES replaces VaR
 
-VaR is **not a coherent risk measure**. It fails the subadditivity axiom (Artzner et al., 1999): diversification can *increase* measured VaR, a perverse outcome for a risk manager. ES satisfies all four coherence axioms — monotonicity, subadditivity, positive homogeneity, and translational invariance. FRTB mandates ES at 97.5% for this reason.
+VaR is **not a coherent risk measure**. It fails the subadditivity axiom (Artzner et al., 1999): diversification can *increase* measured VaR, a perverse outcome for a risk manager. ES satisfies all four coherence axioms: monotonicity, subadditivity, positive homogeneity, and translational invariance. FRTB mandates ES at 97.5% for this reason.
 
 ### Basel traffic light system
 
@@ -73,11 +73,11 @@ The module supports:
 
   $$\ln\sigma_t^2 = \omega + \alpha\left|\frac{\varepsilon_{t-1}}{\sigma_{t-1}}\right| + \gamma\frac{\varepsilon_{t-1}}{\sigma_{t-1}} + \beta\ln\sigma_{t-1}^2$$
 
-  where $\gamma < 0$ indicates the leverage effect — negative shocks raise volatility more than positive ones.
+  where $\gamma < 0$ indicates the leverage effect: negative shocks raise volatility more than positive ones.
 - **Normal and Student-t error distributions** — the t-distribution handles fat tails better. The degrees of freedom parameter controls tail heaviness; lower df = fatter tails.
 - **Grid search** via `fit_garch_grid()` — tries all combinations of (p,q), vol model, and distribution, selecting by AICc:
 
-  $$\text{AICc} = \text{AIC} + \frac{2k(k+1)}{n-k-1}$$
+  $$\mathrm{AICc} = \mathrm{AIC} + \frac{2k(k+1)}{n-k-1}$$
 
   where $k$ is the number of parameters and $n$ the sample size. AICc penalizes complexity more than AIC in small samples, guarding against overfitting the volatility dynamics.
 - **Multi-asset fitting** — one GARCH model per asset for portfolio use
@@ -89,18 +89,18 @@ Core functions: `fit_garch()`, `fit_garch_grid()`, `forecast_vol()`
 Three methods behind a single `compute_var_es()` interface:
 
 **Historical simulation**
-$$\text{VaR}_{\alpha} = \text{Percentile}(\{r_t\}_{t=1}^T, 1-\alpha)$$
+$$\mathrm{VaR}_{\alpha} = \operatorname{Percentile}(\{r_t\}_{t=1}^T, 1-\alpha)$$
 
-The empirical quantile of sorted historical returns. No distributional assumption. When GARCH conditional volatility is available, each historical return is scaled by the ratio $\sigma_t^{\text{GARCH}} / \sigma^{\text{hist}}$ — this inflates or deflates historical returns to reflect current market conditions. Without GARCH scaling, a calm historical period can produce VaR estimates that are dangerously low when volatility spikes.
+The empirical quantile of sorted historical returns. No distributional assumption. When GARCH conditional volatility is available, each historical return is scaled by the ratio $\sigma_t^{\mathrm{GARCH}} / \sigma^{\mathrm{hist}}$. This adjusts historical returns to reflect current market conditions. Without GARCH scaling, a calm historical period can produce VaR estimates that are dangerously low when volatility spikes.
 
 Non-parametric and captures the empirical tail shape. Slow to react to regime changes and sensitive to window length.
 
 **Parametric (variance-covariance)**
-$$\text{VaR}_{\alpha} = \mu + \sigma \cdot z_{\alpha}$$
+$$\mathrm{VaR}_{\alpha} = \mu + \sigma \cdot z_{\alpha}$$
 
 where $z_{\alpha}$ is the standard Normal (or Student-t) quantile. With GARCH, $\sigma$ is the conditional volatility from the fitted model rather than the unconditional standard deviation.
 
-$$\text{ES}_{\alpha} = \mu - \frac{\phi(z_{\alpha})}{1-\alpha} \cdot \sigma \quad \text{(Normal)}$$
+$$\mathrm{ES}_{\alpha} = \mu - \frac{\phi(z_{\alpha})}{1-\alpha} \cdot \sigma \quad \text{(Normal)}$$
 
 where $\phi$ is the standard Normal PDF.
 
@@ -122,29 +122,29 @@ Captures non-linearity and works for any payoff structure. Heavier to compute an
 **Kupiec POF test (1995)**
 A likelihood ratio test of whether observed breach frequency matches the expected rate $1-\alpha$:
 
-$$LR_{\text{POF}} = -2\ln\left(\frac{(1-\alpha)^{x}\,\alpha^{\,T-x}}{(x/T)^{x}\,(1-x/T)^{T-x}}\right) \;\sim\; \chi^2_{(1)}$$
+$$LR_{\mathrm{POF}} = -2\ln\left(\frac{(1-\alpha)^{x}\,\alpha^{\,T-x}}{(x/T)^{x}\,(1-x/T)^{T-x}}\right) \;\sim\; \chi^2_{(1)}$$
 
 Null hypothesis: the breach rate equals $1-\alpha$. Rejection means the VaR model is miscalibrated.
 
 **Christoffersen conditional coverage test (1998)**
 Extends Kupiec by testing whether breaches are independent (not clustered). Models the breach sequence as a first-order Markov chain with transition probabilities $\pi_{ij} = P(I_t = j \mid I_{t-1} = i)$:
 
-$$LR_{\text{Ind}} = -2\ln\left(\frac{(1-\pi)^{n_{00}+n_{10}}\,\pi^{n_{01}+n_{11}}}{(1-\pi_0)^{n_{00}}\,\pi_0^{n_{01}}\,(1-\pi_1)^{n_{10}}\,\pi_1^{n_{11}}}\right) \;\sim\; \chi^2_{(1)}$$
+$$LR_{\mathrm{Ind}} = -2\ln\left(\frac{(1-\pi)^{n_{00}+n_{10}}\,\pi^{n_{01}+n_{11}}}{(1-\pi_0)^{n_{00}}\,\pi_0^{n_{01}}\,(1-\pi_1)^{n_{10}}\,\pi_1^{n_{11}}}\right) \;\sim\; \chi^2_{(1)}$$
 
-where $\pi_0 = n_{01}/(n_{00}+n_{01})$ and $\pi_1 = n_{11}/(n_{10}+n_{11})$ are the conditional breach probabilities, and $\pi = (n_{01}+n_{11})/n$ is the unconditional rate. Large $LR_{\text{Ind}}$ means yesterday's breach predicts today's breach.
+where $\pi_0 = n_{01}/(n_{00}+n_{01})$ and $\pi_1 = n_{11}/(n_{10}+n_{11})$ are the conditional breach probabilities, and $\pi = (n_{01}+n_{11})/n$ is the unconditional rate. Large $LR_{\mathrm{Ind}}$ means yesterday's breach predicts today's breach.
 
 The full conditional coverage test combines both:
 
-$$LR_{\text{CC}} = LR_{\text{POF}} + LR_{\text{Ind}} \;\sim\; \chi^2_{(2)}$$
+$$LR_{\mathrm{CC}} = LR_{\mathrm{POF}} + LR_{\mathrm{Ind}} \;\sim\; \chi^2_{(2)}$$
 
-Breaches that cluster during crisis periods signal that the model does not adapt to volatility regimes — a problem for regulatory approval.
+Breaches that cluster during crisis periods signal that the model does not adapt to volatility regimes, a problem for regulatory approval.
 
 **Acerbi-Szekely Z2 test (2014)**
-A direct backtest for Expected Shortfall — unlike Kupiec and Christoffersen which only test VaR breach frequency. The Z2 statistic measures whether realized returns on breach days are consistent with the ES forecast:
+A direct backtest for Expected Shortfall. Unlike Kupiec and Christoffersen which only test VaR breach frequency, the Z2 statistic measures whether realized returns on breach days are consistent with the ES forecast:
 
-$$Z_2 = \frac{1}{n}\sum_{t=1}^{n} \frac{R_t}{\text{ES}_t} \cdot \mathbf{1}_{\{R_t \leq \text{VaR}_t\}} + 1$$
+$$Z_2 = \frac{1}{n}\sum_{t=1}^{n} \frac{R_t}{\mathrm{ES}_t} \cdot \mathbf{1}_{\{R_t \leq \mathrm{VaR}_t\}} + 1$$
 
-Under the null of correctly specified ES, $\mathbb{E}[Z_2] = 1$ — the expected return on a breach day, expressed as a fraction of ES, should equal 1. If $Z_2$ is significantly below 1, ES forecasts are too optimistic (underestimating tail loss). If above 1, ES is too conservative.
+Under the null of correctly specified ES, $\mathbb{E}[Z_2] = 1$: the expected return on a breach day, expressed as a fraction of ES, should equal 1. If $Z_2$ is significantly below 1, ES forecasts are too optimistic (underestimating tail loss). If above 1, ES is too conservative.
 
 P-values are computed by Monte Carlo simulation: breach days are randomly reshuffled under the null, and the distribution of Z2 under no timing skill is compared to the observed value.
 
@@ -173,7 +173,7 @@ Representative results for OMXS30 (Swedish large-cap index) over a 5-year window
 | Monte Carlo (GBM) | -1.98% | -3.08% | -3.52% | 8 | 0.42 |
 
 **What stands out:**
-- Student-t parametric VaR captures tail risk best — lowest breach count and highest Kupiec p-value
+- Student-t parametric VaR captures tail risk best: lowest breach count and highest Kupiec p-value
 - Normal parametric VaR is rejected (p < 0.05) because the data has fatter tails than a Normal distribution
 - GARCH scaling visibly improves Historical VaR calibration over the unconditional version
 - Monte Carlo with GARCH conditional vol produces well-calibrated forecasts
