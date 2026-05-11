@@ -284,12 +284,19 @@ with tab_exec:
 
     # Spotlight metrics
     col1, col2, col3 = st.columns(3)
-    col1.metric(
-        "GARCH Model",
-        f"{garch_result.vol}({garch_result.p},{garch_result.q})-{garch_result.dist}" if use_garch and garch_result else "N/A",
-        delta=f"AICc: {garch_result.aicc:.1f}" if use_garch and garch_result else None,
-        help="GARCH(1,1) volatility model. See Model Deep-Dive tab for grid search across 16 specifications."
-    )
+    if use_garch and garch_result:
+        col1.metric(
+            "GARCH Model",
+            f"{garch_result.vol}({garch_result.p},{garch_result.q})-{garch_result.dist}",
+            delta=f"AICc: {garch_result.aicc:.1f}",
+            help="GARCH(1,1) volatility model. See Model Deep-Dive tab for grid search across 16 specifications."
+        )
+    else:
+        col1.metric(
+            "GARCH Model",
+            "N/A",
+            help="Enable 'Use GARCH volatility' in sidebar to fit a model."
+        )
     col2.metric(
         "Current VaR (97.5%)", f"{alpha_results[0.975].var:.4%}",
         delta=f"Method: {method.capitalize()}",
