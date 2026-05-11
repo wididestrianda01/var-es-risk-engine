@@ -61,11 +61,15 @@ with st.sidebar:
 
     st.divider()
 
-    st.caption(
-        "**Tip:** Use the tabs above to navigate between analysis views. "
-        "Each tab builds on the previous — start with Executive Summary "
-        "for the full pipeline overview."
-    )
+    if st.button("Run Live Analysis", type="primary", use_container_width=True):
+        st.session_state.data_source = "live"
+        st.rerun()
+
+    if st.session_state.data_source == "default":
+        st.info(
+            "**Default View:** Pre-computed OMXS30 results (2010–2025). "
+            "Adjust controls above and click **Run Live Analysis**."
+        )
 
 
 @st.cache_data(ttl=3600)
@@ -203,54 +207,81 @@ def _compute_defaults():
         "breaches_975_arr": breaches_975,
     }
 
+    # VaR/ES at all three confidence levels (historical, GARCH-scaled)
+    alpha_results_default = {}
+    for a in ALPHAS:
+        alpha_results_default[a] = compute_var_es(
+            returns, method="historical", alpha=a, horizon=1,
+            garch_result=garch_single
+        )
+
     return {
         "garch_grid": garch_grid,
         "garch_single": garch_single,
         "backtest": backtest,
         "stress_scenarios": scenarios,
         "returns": returns,
+        "alpha_results": alpha_results_default,
+        "result": alpha_results_default[0.975],
     }
 
 
-try:
-    prices, returns = load_data(ticker, *date_range)
-    garch_result = fit_garch(returns) if use_garch else None
+# ── Pre-compute defaults (cached) & session state ─────────────────────────
 
-    # Grid search for Model Deep-Dive tab (single asset)
-    from src.garch import fit_garch_grid
-    garch_grid_result = fit_garch_grid(returns) if use_garch else None
+defaults = _compute_defaults()
 
-    # VaR/ES for selected alpha (primary)
-    result = compute_var_es(
-        returns, method=method, alpha=alpha, horizon=horizon,
-        garch_result=garch_result
-    )
+if "data_source" not in st.session_state:
+    st.session_state.data_source = "default"
 
-    # VaR/ES at all three confidence levels (for multi-alpha charts)
-    alpha_results = {}
-    for a in ALPHAS:
-        g = garch_result if method != "historical" else None
-        alpha_results[a] = compute_var_es(
-            returns, method=method, alpha=a, horizon=horizon,
-            garch_result=g
+
+# ── Live data loading (only when user triggers analysis) ──────────────────
+
+if st.session_state.data_source == "live":
+    try:
+        prices, returns = load_data(ticker, *date_range)
+        garch_result = fit_garch(returns) if use_garch else None
+
+        from src.garch import fit_garch_grid
+        garch_grid_result = fit_garch_grid(returns) if use_garch else None
+
+        result = compute_var_es(
+            returns, method=method, alpha=alpha, horizon=horizon,
+            garch_result=garch_result
         )
 
-    data_ok = True
-except Exception as exc:
-    data_ok = False
-    error_msg = str(exc)
-    st.error(f"**Data Error:** {error_msg}")
-    st.info(
-        "Try a different ticker or a narrower date range. "
-        "Swedish equities (Ericsson, Volvo, H&M, Swedbank) use "
-        "Yahoo Finance Stockholm suffix (.ST)."
-    )
+        alpha_results = {}
+        for a in ALPHAS:
+            g = garch_result if method != "historical" else None
+            alpha_results[a] = compute_var_es(
+                returns, method=method, alpha=a, horizon=horizon,
+                garch_result=g
+            )
 
-if not data_ok:
-    st.stop()
+        data_ok = True
+    except Exception as exc:
+        data_ok = False
+        error_msg = str(exc)
+        st.error(f"**Data Error:** {error_msg}")
+        st.info(
+            "Try a different ticker or a narrower date range. "
+            "Swedish equities (Ericsson, Volvo, H&M, Swedbank) use "
+            "Yahoo Finance Stockholm suffix (.ST)."
+        )
 
-# Pre-compute defaults for fallback display (OMXS30, 2010-2025)
-defaults = _compute_defaults()
+    if not data_ok:
+        st.stop()
+
+
+# ── Set active data source for tabs ───────────────────────────────────────
+
+using_default = st.session_state.data_source == "default"
+
+if using_default:
+    returns = defaults["returns"]
+    result = defaults["result"]
+    alpha_results = defaults["alpha_results"]
+    garch_result = defaults["garch_single"]
+    garch_grid_result = defaults["garch_grid"]
 
 # ── Tabs ─────────────────────────────────────────────────────────────────────
 
@@ -537,17 +568,8 @@ with tab_model:
     else:
         # Determine data source: live or default
         gr = garch_grid_result
-        using_default = False
         if gr is None:
             gr = defaults["garch_grid"]
-            using_default = True
-
-        if using_default:
-            st.info(
-                "**Showing default view (OMXS30, 2010–2025).** "
-                "Grid search did not converge for current selection. "
-                "Try a wider date range or different asset."
-            )
 
         st.subheader("Model Selection: Grid Search Results")
 
@@ -845,12 +867,15 @@ with tab_backtest:
     st.header("Backtesting")
 
     est_window = 500
-    using_default = False
     loop_failed = False
+    local_fallback = using_default
 
     # Decide data source
-    if len(returns) < est_window:
-        using_default = True
+    if using_default:
+        # Skip live loop entirely \u2014 use pre-computed defaults
+        pass
+    elif len(returns) < est_window:
+        local_fallback = True
     else:
         # Attempt live rolling backtest
         var_fc, es_fc, real = [], [], []
@@ -880,15 +905,10 @@ with tab_backtest:
                 continue
 
         if len(var_fc) == 0:
-            using_default = True
+            local_fallback = True
 
-    if using_default:
+    if local_fallback:
         bt = defaults["backtest"]
-        st.info(
-            "**Showing default view (OMXS30, 2010\u20132025).** "
-            "Need at least 500 observations for backtesting. "
-            "Select a wider date range for live analysis."
-        )
         var_arr = bt["var_arr"]
         es_arr = bt["es_arr"]
         ret_arr = bt["ret_arr"]
@@ -1050,43 +1070,46 @@ with tab_backtest:
 with tab_stress:
     st.header("Stress Tests")
 
-    using_default = False
+    local_fallback = using_default
 
-    ret_series = pd.Series(
-        returns,
-        index=pd.date_range(
-            start=date_range[0], periods=len(returns), freq="B"
-        ),
-    )
+    if using_default:
+        scenarios = defaults["stress_scenarios"]
+    else:
+        ret_series = pd.Series(
+            returns,
+            index=pd.date_range(
+                start=date_range[0], periods=len(returns), freq="B"
+            ),
+        )
 
-    scenarios = {}
-    for label, s, e in [
-        ("COVID 2020", "2020-02-19", "2020-03-23"),
-        ("2008 GFC", "2008-09-01", "2008-12-31"),
-    ]:
+        scenarios = {}
+        for label, s, e in [
+            ("COVID 2020", "2020-02-19", "2020-03-23"),
+            ("2008 GFC", "2008-09-01", "2008-12-31"),
+        ]:
+            try:
+                scenarios[label] = run_historical_scenario(
+                    ret_series, s, e, label
+                )
+            except (ValueError, KeyError):
+                pass
+
         try:
-            scenarios[label] = run_historical_scenario(
-                ret_series, s, e, label
+            worst_start, worst_end = find_worst_window(ret_series)
+            scenarios["Worst 12-Month"] = run_historical_scenario(
+                ret_series,
+                str(worst_start.date()),
+                str(worst_end.date()),
+                "Worst Auto-Detected",
             )
         except (ValueError, KeyError):
             pass
 
-    try:
-        worst_start, worst_end = find_worst_window(ret_series)
-        scenarios["Worst 12-Month"] = run_historical_scenario(
-            ret_series,
-            str(worst_start.date()),
-            str(worst_end.date()),
-            "Worst Auto-Detected",
-        )
-    except (ValueError, KeyError):
-        pass
+        if not scenarios:
+            scenarios = defaults["stress_scenarios"]
+            local_fallback = True
 
-    if not scenarios:
-        scenarios = defaults["stress_scenarios"]
-        using_default = True
-
-    if using_default:
+    if local_fallback:
         st.info(
             "**Showing default view (OMXS30, 2010–2025).** "
             "No stress scenarios overlap the selected date range. "
@@ -1124,7 +1147,7 @@ with tab_stress:
     # Waterfall chart
     st.subheader("Stress Escalation Waterfall")
     try:
-        baseline_va = abs(alpha_results[0.975].var) if not using_default else abs(
+        baseline_va = abs(alpha_results[0.975].var) if not local_fallback else abs(
             np.percentile(defaults["returns"], 2.5)
         )
         waterfall_fig = plot_scenario_waterfall(scenarios, baseline_va)
