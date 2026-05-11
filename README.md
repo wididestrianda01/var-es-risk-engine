@@ -7,8 +7,6 @@
 
 A multi-asset risk engine that computes Value at Risk (VaR) via three methods (Historical, Parametric, Monte Carlo) alongside Expected Shortfall (ES), backed by GARCH volatility modeling and regulatory backtesting against Basel Committee standards.
 
-![Dashboard](img/overview.png)
-
 ## Executive summary
 
 This project is a market risk engine built to the standards expected of a Risk Analyst role at a Nordic bank or consulting firm. It covers the full pipeline: data, volatility modeling, risk measurement, backtesting, and an interactive dashboard.
@@ -209,6 +207,36 @@ Historical scenario replay and sensitivity analysis:
 - `run_historical_scenario()` — computes VaR/ES over predefined stress periods (COVID 2020 crash)
 - `find_worst_window()` — finds the worst rolling return window in the dataset
 - `sensitivity_shocks()` — applies user-defined factor shocks to asset returns
+
+## Dashboard
+
+**Live:** [var-es-risk-engine.streamlit.app](https://var-es-risk-engine.streamlit.app/)
+
+![Overview](img/overview.png)
+
+The Streamlit dashboard provides interactive exploration of all four pipeline stages across seven tabs.
+
+### Method Comparison
+
+![Method Comparison](img/method_compare.png)
+
+Historical, Parametric, and Monte Carlo VaR/ES side-by-side at the selected confidence level, with distribution fit analysis and confidence level sensitivity.
+
+### Backtesting
+
+![Backtesting 1](img/backtest1.png)
+
+![Backtesting 2](img/backtest2.png)
+
+Rolling backtest with Kupiec POF, Christoffersen conditional coverage, and Acerbi-Szekely Z2 tests. FRTB dual-condition breach map and Basel traffic light classification updated per window.
+
+### Stress Tests
+
+![Stress Tests 1](img/stresstest1.png)
+
+![Stress Tests 2](img/stresstest2.png)
+
+Historical scenario replay (COVID 2020, GFC 2008, worst auto-detected window) with stress escalation waterfall and severity ranking.
 
 ## Results
 
