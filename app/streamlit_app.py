@@ -465,14 +465,193 @@ with tab_compare:
     )
     st.plotly_chart(fig, use_container_width=True)
 
+    st.divider()
+
+    # Distribution overlay for current selection
+    st.subheader("Distribution Fit Analysis")
+    dist_fig = _plot_distribution_overlay(returns, result, alpha)
+    st.plotly_chart(dist_fig, use_container_width=True)
+
+    with st.expander("Why Distribution Choice Matters"):
+        st.markdown(f"""
+        **Normal distribution underestimates tail risk.** The empirical
+        returns have excess kurtosis (fat tails) — extreme events occur
+        more frequently than the Normal distribution predicts.
+
+        At {alpha:.1%} confidence:
+        - **Parametric-Normal VaR:** {alpha_results[alpha].var:.4%}
+        - **Parametric-t VaR:** use Method Comparison table above for t-based estimate
+
+        The Student-t distribution better captures tail fatness through
+        its degrees-of-freedom parameter (ν). Lower ν = fatter tails.
+        Typical equity returns have ν between 3 and 6.
+        """)
+
+    # Confidence level sensitivity
+    st.subheader("Confidence Level Sensitivity")
+    sens_data = {
+        "Confidence": [f"{a:.1%}" for a in ALPHAS],
+        "VaR": [abs(alpha_results[a].var) for a in ALPHAS],
+        "ES": [abs(alpha_results[a].es) for a in ALPHAS],
+    }
+    fig_sens = go.Figure()
+    fig_sens.add_trace(go.Bar(
+        name="VaR", x=sens_data["Confidence"], y=sens_data["VaR"],
+        marker_color="steelblue"
+    ))
+    fig_sens.add_trace(go.Bar(
+        name="ES", x=sens_data["Confidence"], y=sens_data["ES"],
+        marker_color="darkred"
+    ))
+    fig_sens.update_layout(
+        title="VaR vs ES Across Confidence Levels",
+        yaxis_title="Loss Magnitude", barmode="group"
+    )
+    st.plotly_chart(fig_sens, use_container_width=True)
+
+    st.caption(
+        "As confidence level increases (95% → 97.5% → 99%), both VaR "
+        "and ES become more conservative. ES grows faster than VaR at "
+        "higher confidence levels because it captures more of the tail."
+    )
+
 # ── Tab 4: Model Deep-Dive ──────────────────────────────────────────────────
 
 with tab_model:
-    st.header("Model Deep-Dive")
-    st.info(
-        "GARCH residual diagnostics, QQ plots, and conditional "
-        "volatility decomposition — coming in the next enhancement."
-    )
+    st.header("GARCH Model Deep-Dive")
+
+    if not use_garch:
+        st.info("Enable 'Use GARCH volatility' in the sidebar to see model diagnostics.")
+    elif garch_grid_result is None:
+        st.warning("GARCH grid search did not converge for this asset. Try a different ticker or date range.")
+    else:
+        gr = garch_grid_result
+
+        st.subheader("Model Selection: Grid Search Results")
+
+        with st.expander("How Model Selection Works", expanded=False):
+            st.markdown("""
+            **Grid search** evaluates every combination of:
+            - **Volatility model:** GARCH (symmetric) vs EGARCH (leverage)
+            - **Error distribution:** Normal vs Student-t
+            - **Lag orders:** p (ARCH) ∈ {1,2}, q (GARCH) ∈ {1,2}
+
+            **AICc (Corrected Akaike Information Criterion)** penalizes
+            model complexity — lower AICc = better fit without overfitting.
+            AICc is preferred over AIC for financial data because it
+            includes a finite-sample correction.
+            """)
+
+        # Grid search result summary
+        st.markdown(f"""
+        **Selected Model:** **{gr.vol}({gr.p},{gr.q})-{gr.dist}**
+        | AICc: {gr.aicc:.1f} | AIC: {gr.aic:.1f} | BIC: {gr.bic:.1f}
+        """)
+
+        if gr.params:
+            param_df = pd.DataFrame(
+                {"Value": list(gr.params.values())},
+                index=list(gr.params.keys())
+            )
+            st.dataframe(param_df, use_container_width=True)
+
+        # Persistence and half-life
+        alpha_keys = [k for k in gr.params if 'alpha' in k]
+        beta_keys = [k for k in gr.params if 'beta' in k]
+        persistence = sum(abs(gr.params[k]) for k in alpha_keys + beta_keys)
+        half_life = np.log(0.5) / np.log(max(persistence, 0.001)) if 0 < persistence < 1 else float('inf')
+
+        col1, col2 = st.columns(2)
+        col1.metric("Volatility Persistence", f"{persistence:.4f}",
+                     delta="Stationary" if persistence < 1 else "Non-stationary")
+        col2.metric("Half-Life", f"{half_life:.0f} trading days" if half_life < 1e6 else "∞",
+                     delta=f"~{half_life/252:.1f} years" if half_life < 1e6 else None)
+
+        # Conditional volatility plot
+        st.subheader("Conditional Volatility")
+        st.markdown(
+            "**Context:** The GARCH model decomposes returns into a "
+            "time-varying volatility component. Spikes correspond to "
+            "market stress events."
+        )
+        try:
+            vol_fig = _plot_conditional_vol(gr, NAME_MAP[ticker])
+            st.plotly_chart(vol_fig, use_container_width=True)
+        except Exception as e:
+            st.warning(f"Could not render conditional volatility plot: {e}")
+
+        # Standardized residuals
+        st.subheader("Model Diagnostics: Standardized Residuals")
+        if hasattr(gr, 'cond_vol') and len(gr.cond_vol) > 1:
+            std_resid = returns[-len(gr.cond_vol):] / np.maximum(gr.cond_vol, 1e-10)
+
+            col1, col2 = st.columns(2)
+            with col1:
+                qq_fig = _plot_qq_residuals(std_resid, gr.dist, NAME_MAP[ticker])
+                st.plotly_chart(qq_fig, use_container_width=True)
+
+            with col2:
+                # ACF of squared standardized residuals
+                from statsmodels.tsa.stattools import acf
+                sq_resid = std_resid ** 2
+                acf_vals = acf(sq_resid, nlags=20)
+                acf_fig = go.Figure()
+                acf_fig.add_trace(go.Bar(
+                    x=list(range(1, 21)), y=acf_vals[1:],
+                    marker_color="steelblue"
+                ))
+                ci = 1.96 / np.sqrt(len(sq_resid))
+                acf_fig.add_hline(
+                    y=ci, line_dash="dash", line_color="red",
+                    annotation_text="95% CI"
+                )
+                acf_fig.add_hline(
+                    y=-ci, line_dash="dash", line_color="red"
+                )
+                acf_fig.update_layout(
+                    title="ACF of Squared Std Residuals",
+                    xaxis_title="Lag", yaxis_title="Autocorrelation"
+                )
+                st.plotly_chart(acf_fig, use_container_width=True)
+
+            st.caption(
+                "**Interpretation:** If the GARCH model adequately "
+                "captures volatility dynamics, standardized residuals "
+                "should be approximately i.i.d. — QQ points should lie "
+                "near the diagonal, and squared residuals should show "
+                "no significant autocorrelation (bars within the 95% CI)."
+            )
+
+        # EGARCH leverage explainer (if applicable)
+        if gr.vol == "EGARCH":
+            st.subheader("Leverage Effect (EGARCH)")
+            gamma_keys = [k for k in gr.params if 'gamma' in k]
+            if gamma_keys:
+                gamma_val = gr.params[gamma_keys[0]]
+                st.markdown(f"""
+                **Asymmetric volatility parameter (γ):** {gamma_val:.4f}
+
+                **Interpretation:**
+                - γ < 0 → negative returns increase volatility more than
+                  positive returns (the **leverage effect**)
+                - |γ| measures the magnitude of the asymmetry
+                - This parameter distinguishes EGARCH from standard GARCH
+                  — it explicitly models the empirical observation that
+                  volatility rises more after market declines than after
+                  equivalent gains
+
+                **Finding (from notebooks):** EGARCH was selected for all
+                five Swedish equities by AICc. The leverage effect is a
+                systematic feature of this equity universe — negative
+                shocks amplify future volatility 2-3x more than positive
+                shocks of equal magnitude.
+                """)
+
+        st.info(
+            "**Notebook reference:** Full grid search details and "
+            "per-asset diagnostics in Notebook 02 — GARCH Volatility "
+            "Modeling (`notebooks/02_garch_volatility.ipynb`)."
+        )
 
 # ── Tab 5: Methodology ──────────────────────────────────────────────────────
 
