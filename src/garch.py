@@ -71,7 +71,12 @@ def fit_garch(
     model = arch_model(returns, mean=mean, vol="GARCH", p=p, q=q, dist=dist)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        fit = model.fit(disp="off")
+        # Use BHHH-style optimizer with tighter tolerance for better convergence
+        # on heavy-tailed equity return data
+        fit = model.fit(
+            disp="off",
+            options={"maxiter": 2000, "ftol": 1e-12},
+        )
 
     params = {k: v for k, v in fit.params.items()}
     aic = float(fit.aic)
