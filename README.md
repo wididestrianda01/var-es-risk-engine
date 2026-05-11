@@ -30,7 +30,7 @@ The loss that will not be exceeded with probability $1 - \alpha$ over a holding 
 
 
 $$
-\mathrm{VaR}_\alpha = \inf\,\{\,l \in \mathbb{R} : P(L > l) \leq 1 - \alpha\,\}
+\mathrm{VaR}_\alpha^h = \inf\,\{\,l \in \mathbb{R} : P(L_h > l) \leq 1 - \alpha\,\}
 $$
 
 
