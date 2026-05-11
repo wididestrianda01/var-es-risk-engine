@@ -19,8 +19,8 @@ from src.utils import compute_returns, fetch_prices
 from src.var_methods import compute_var_es
 
 from app.charts import (plot_breach_timeline, plot_conditional_vol,
-                        plot_distribution_overlay, plot_qq_residuals,
-                        plot_scenario_waterfall)
+                        plot_distribution_overlay, plot_news_impact_curve,
+                        plot_qq_residuals, plot_scenario_waterfall)
 
 # ── Constants: Swedish equity universe (aligned with notebooks) ──────────
 
@@ -94,6 +94,123 @@ def _volatility_persistence(params):
     )
     return persistence, half_life
 
+@st.cache_data(ttl=3600)
+def _compute_defaults():
+    """Pre-compute OMXS30 2010-2025 results for fallback display.
+
+    Runs GARCH grid search, rolling backtest (500-day window, historical
+    method at 99% VaR), and stress scenarios once per hour. Returns a
+    dict with keys: garch_grid, garch_single, backtest, stress_scenarios,
+    returns.
+    """
+    default_ticker = "^OMX"
+    default_start = "2010-01-01"
+    default_end = "2025-12-31"
+
+    prices = fetch_prices(default_ticker, default_start, default_end)
+    returns = compute_returns(prices, method="log")
+
+    # GARCH: grid search for best model + single fit for cond vol
+    garch_grid = fit_garch_grid(returns)
+    garch_single = fit_garch(returns)
+
+    # Rolling backtest: 500-day window, historical method, 99% VaR
+    est_window = 500
+    var_fc, es_fc, real = [], [], []
+    var_fc_975 = []
+    prev_garch = None
+    for t in range(est_window, len(returns)):
+        train = returns[t - est_window : t]
+        try:
+            g = fit_garch(train)
+            prev_garch = g
+        except Exception:
+            g = prev_garch  # reuse previous successful fit
+        try:
+            r = compute_var_es(
+                train, method="historical", alpha=0.99, garch_result=g
+            )
+            var_fc.append(r.var)
+            es_fc.append(r.es)
+            real.append(returns[t])
+            r_975 = compute_var_es(
+                train, method="historical", alpha=0.975, garch_result=g
+            )
+            var_fc_975.append(r_975.var)
+        except Exception:
+            continue
+
+    var_arr = np.array(var_fc)
+    es_arr = np.array(es_fc)
+    ret_arr = np.array(real)
+    var_975_arr = np.array(var_fc_975)
+    breaches = (ret_arr <= var_arr).astype(int)
+    breaches_975 = (ret_arr <= var_975_arr).astype(int)
+
+    # Stress scenarios
+    ret_series = pd.Series(
+        returns,
+        index=pd.date_range(
+            start=pd.Timestamp(default_start),
+            periods=len(returns),
+            freq="B",
+        ),
+    )
+    scenarios = {}
+    for label, s, e in [
+        ("COVID 2020", "2020-02-19", "2020-03-23"),
+        ("2008 GFC", "2008-09-01", "2008-12-31"),
+    ]:
+        try:
+            scenarios[label] = run_historical_scenario(
+                ret_series, s, e, label
+            )
+        except (ValueError, KeyError):
+            pass
+    try:
+        worst_start, worst_end = find_worst_window(ret_series)
+        scenarios["Worst 12-Month"] = run_historical_scenario(
+            ret_series,
+            str(worst_start.date()),
+            str(worst_end.date()),
+            "Worst Auto-Detected",
+        )
+    except (ValueError, KeyError):
+        pass
+
+    backtest = {
+        "breaches_sum": int(breaches.sum()),
+        "breaches_total": len(breaches),
+        "breaches_975_sum": int(breaches_975.sum()),
+        "kupiec": kupiec_test(breaches.sum(), len(breaches), 0.99),
+        "christoffersen": christoffersen_test(breaches),
+        "acerbi_szekely": acerbi_szekely_z2(
+            ret_arr, var_arr, es_arr, 0.99, n_sim=500
+        ),
+        "traffic_basel": traffic_light(
+            breaches.sum(), len(breaches), framework="basel1996"
+        ),
+        "traffic_frtb": traffic_light(
+            breaches_99=breaches.sum(),
+            breaches_975=breaches_975.sum(),
+            total=len(breaches),
+            framework="frtb2019",
+        ),
+        "ret_arr": ret_arr,
+        "var_arr": var_arr,
+        "es_arr": es_arr,
+        "breaches_arr": breaches,
+        "breaches_975_arr": breaches_975,
+    }
+
+    return {
+        "garch_grid": garch_grid,
+        "garch_single": garch_single,
+        "backtest": backtest,
+        "stress_scenarios": scenarios,
+        "returns": returns,
+    }
+
 
 try:
     prices, returns = load_data(ticker, *date_range)
@@ -131,6 +248,9 @@ except Exception as exc:
 
 if not data_ok:
     st.stop()
+
+# Pre-compute defaults for fallback display (OMXS30, 2010-2025)
+defaults = _compute_defaults()
 
 # ── Tabs ─────────────────────────────────────────────────────────────────────
 
