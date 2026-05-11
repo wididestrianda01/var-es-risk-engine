@@ -943,13 +943,14 @@ with tab_backtest:
         z2_test = acerbi_szekely_z2(
             ret_arr, var_arr, es_arr, alpha, n_sim=500
         )
+        tl_n = min(len(breaches), 250)
         tl_basel = traffic_light(
-            breaches.sum(), len(breaches), framework="basel1996"
+            int(breaches[-tl_n:].sum()), tl_n, framework="basel1996"
         )
         tl_frtb = traffic_light(
-            breaches_99=breaches.sum(),
-            breaches_975=breaches_975.sum(),
-            total=len(breaches),
+            breaches_99=int(breaches[-tl_n:].sum()),
+            breaches_975=int(breaches_975[-tl_n:].sum()),
+            total=tl_n,
             framework="frtb2019",
         )
 
