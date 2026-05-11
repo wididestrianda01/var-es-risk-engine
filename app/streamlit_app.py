@@ -1,7 +1,9 @@
 """VaR & Expected Shortfall Risk Engine — Streamlit Dashboard."""
 
 import os
+import pickle
 import sys
+from pathlib import Path
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -231,9 +233,15 @@ def _compute_defaults():
     }
 
 
-# ── Pre-compute defaults (cached) ─────────────────────────────────────────
+# ── Load pre-computed defaults from pickle ────────────────────────────────
 
-defaults = _compute_defaults()
+_DEFAULTS_PATH = Path(__file__).parent / "defaults.pkl"
+
+def _load_defaults():
+    with open(_DEFAULTS_PATH, "rb") as f:
+        return pickle.load(f)
+
+defaults = _load_defaults()
 
 
 # ── Live data loading (only when user triggers analysis) ──────────────────
