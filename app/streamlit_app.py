@@ -43,7 +43,7 @@ with st.sidebar:
     )
     alpha = st.selectbox(
         "Confidence Level",
-        [0.95, 0.975, 0.99],
+        ALPHAS,
         index=1,
         format_func=lambda x: f"{x * 100:.1f}%",
     )
@@ -95,19 +95,18 @@ def _plot_distribution_overlay(returns, result, alpha):
     return fig
 
 
-def _plot_conditional_vol(returns_series, garch_result, ticker_name):
+def _plot_conditional_vol(garch_result, ticker_name):
     """Conditional volatility time series with crisis annotations."""
     fig = go.Figure()
-    date_index = pd.date_range(end=pd.Timestamp.today(), periods=len(garch_result.cond_vol), freq="B")
     fig.add_trace(go.Scatter(
-        x=date_index[-len(garch_result.cond_vol):],
         y=garch_result.cond_vol,
         name="Conditional Volatility",
         line=dict(color="steelblue", width=1.5)
     ))
-    # COVID-19 shaded region
+    # COVID-19 shaded region (approximate position — assumes 2010-2025 data, ~250 days/yr)
+    n = len(garch_result.cond_vol)
     fig.add_vrect(
-        x0="2020-02-19", x1="2020-03-23",
+        x0=n - 1300, x1=n - 1220,
         fillcolor="red", opacity=0.1,
         annotation_text="COVID-19 Crash"
     )
