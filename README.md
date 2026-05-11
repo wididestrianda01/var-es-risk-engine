@@ -236,7 +236,7 @@ Rolling backtest with Kupiec POF, Christoffersen conditional coverage, and Acerb
 
 ![Stress Tests 2](img/stresstest2.png)
 
-Historical scenario replay (COVID 2020, GFC 2008, worst auto-detected window) with stress escalation waterfall and severity ranking.
+Historical scenario replay (COVID 2020 crash, worst auto-detected window) with stress escalation waterfall and severity ranking.
 
 ## Results
 
