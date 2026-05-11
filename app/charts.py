@@ -244,7 +244,7 @@ def plot_news_impact_curve(
 
     if garch_result.vol == "EGARCH":
         # EGARCH: log(sigma^2_t) = ... + alpha * (|eps| + gamma*eps)
-        impacts = omega + alpha * (np.abs(eps) + gamma * eps)
+        impacts = omega + alpha * np.abs(eps) + gamma * eps
     else:
         # GARCH: sigma^2_t = ... + alpha * eps^2
         impacts = omega + alpha * eps ** 2

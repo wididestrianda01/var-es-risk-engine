@@ -1,8 +1,8 @@
 """Tests for app/charts.py chart functions."""
 
 import numpy as np
-import pytest
 from app.charts import plot_news_impact_curve
+from plotly.graph_objects import Figure
 from src.garch import GarchResult
 
 
@@ -48,6 +48,12 @@ class TestNewsImpactCurve:
             f"Expected impact_neg ({impact_neg:.4f}) > impact_pos ({impact_pos:.4f})"
         )
 
+        # Magnitude check: asymmetry should be substantial
+        asymmetry = impact_neg - impact_pos
+        assert asymmetry > 0.05, (
+            f"Expected asymmetry > 0.05, got {asymmetry:.4f}"
+        )
+
     def test_garch_symmetry(self):
         """GARCH: impact is symmetric (equal for +/- shocks)."""
         result = make_garch_result(vol="GARCH", dist="normal")
@@ -70,7 +76,6 @@ class TestNewsImpactCurve:
         """Function returns a plotly Figure."""
         result = make_garch_result()
         fig = plot_news_impact_curve(result)
-        from plotly.graph_objects import Figure
         assert isinstance(fig, Figure)
 
     def test_vline_at_zero(self):
@@ -82,3 +87,15 @@ class TestNewsImpactCurve:
             for s in (fig.layout.shapes or [])
         )
         assert vline_exists, "Expected vertical line at x=0"
+
+
+    def test_yaxis_label_by_vol_type(self):
+        """EGARCH uses log(sigma) label, GARCH uses sigma label."""
+        result_egarch = make_garch_result(vol="EGARCH")
+        fig_egarch = plot_news_impact_curve(result_egarch)
+        assert "log(" in fig_egarch.layout.yaxis.title.text
+
+        result_garch = make_garch_result(vol="GARCH", dist="normal")
+        fig_garch = plot_news_impact_curve(result_garch)
+        assert "log(" not in fig_garch.layout.yaxis.title.text
+
