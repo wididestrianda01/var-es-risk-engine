@@ -9,7 +9,9 @@ dist/
 .superpowers/
 
 docs
+reports
+scripts
+.claude
 P1_VaR_ES_Reference.md
 ruvector.db
 TODO.txt
-scripts
