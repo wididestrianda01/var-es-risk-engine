@@ -995,6 +995,8 @@ with tab_backtest:
 with tab_stress:
     st.header("Stress Tests")
 
+    using_default = False
+
     ret_series = pd.Series(
         returns,
         index=pd.date_range(
@@ -1025,93 +1027,101 @@ with tab_stress:
     except (ValueError, KeyError):
         pass
 
-    if scenarios:
-        df_scenarios = pd.DataFrame(
-            [
-                {
-                    "Scenario": s,
-                    "VaR": f"{r.var:.4%}",
-                    "ES": f"{r.es:.4%}",
-                    "Cumulative P&L": f"{r.pnl:.4%}",
-                    "Worst Day": f"{r.worst_day:.4%}",
-                }
-                for s, r in scenarios.items()
-            ]
-        )
-        st.dataframe(df_scenarios, use_container_width=True)
+    if not scenarios:
+        scenarios = defaults["stress_scenarios"]
+        using_default = True
 
-        fig = go.Figure()
-        for s, r in scenarios.items():
-            fig.add_trace(
-                go.Bar(name=s, x=["VaR", "ES"], y=[abs(r.var), abs(r.es)])
-            )
-        fig.update_layout(
-            title="Stress Scenario Comparison",
-            yaxis_title="Loss Magnitude",
-            barmode="group",
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-        st.divider()
-
-        # Scenario waterfall chart
-        st.subheader("Stress Escalation Waterfall")
-        try:
-            baseline_va = abs(alpha_results[0.975].var)
-            waterfall_fig = plot_scenario_waterfall(scenarios, baseline_va)
-            st.plotly_chart(waterfall_fig, use_container_width=True)
-        except Exception as e:
-            st.warning(f"Could not render waterfall chart: {e}")
-
-        st.caption(
-            "The waterfall shows how VaR magnitude escalates from baseline "
-            "(full-sample) → crisis scenarios → worst historical window. "
-            "Each step represents the additional risk revealed by stress "
-            "testing beyond normal-market VaR."
+    if using_default:
+        st.info(
+            "**Showing default view (OMXS30, 2010–2025).** "
+            "No stress scenarios overlap the selected date range. "
+            "Select a range covering 2008–2020 for live analysis."
         )
 
-        # Regulatory capital implication
-        st.subheader("Regulatory Context")
-        with st.expander("How Stress Tests Feed Into Capital Requirements"):
-            st.markdown("""
-            **Basel III / FRTB Framework:**
-
-            1. **VaR-based capital** (day-to-day): Uses the VaR model
-               calibrated to a 1-year window with 97.5% ES
-
-            2. **Stressed VaR / ES** (crisis-period calibration): Computed
-               over a 12-month period of significant financial stress. In
-               this dashboard: the COVID-19 crash (Feb–Mar 2020) or the
-               worst auto-detected window.
-
-            3. **Capital floor:** The higher of:
-               - Current VaR × multiplier (3.0–4.0, from traffic light)
-               - Stressed VaR × multiplier
-               - Standardized Approach (SA-CCR) capital charge
-
-            **Key insight:** Stress testing is not optional — it directly
-            determines regulatory capital. A model that passes backtesting
-            in normal markets but fails under stress produces capital
-            requirements that are 1.5–3x higher.
-            """)
-
-        # Sensitivity analysis summary
-        st.subheader("Scenario Severity Ranking")
-        severity_data = pd.DataFrame([
-            {"Scenario": s, "|VaR|": abs(r.var), "|ES|": abs(r.es),
-             "Cumul. P&L": r.pnl, "Worst Day": r.worst_day}
+    df_scenarios = pd.DataFrame(
+        [
+            {
+                "Scenario": s,
+                "VaR": f"{r.var:.4%}",
+                "ES": f"{r.es:.4%}",
+                "Cumulative P&L": f"{r.pnl:.4%}",
+                "Worst Day": f"{r.worst_day:.4%}",
+            }
             for s, r in scenarios.items()
-        ]).sort_values("|VaR|", ascending=False)
-        st.dataframe(severity_data, use_container_width=True)
+        ]
+    )
+    st.dataframe(df_scenarios, use_container_width=True)
 
-        st.caption(
-            "**Finding (from notebooks):** Crisis-period VaR is 2–5x "
-            "higher than full-sample VaR. COVID-19 crash produced the "
-            "largest volatility spike in the 2010–2025 sample, with a "
-            "5.3x VaR multiplier. The worst auto-detected window captures "
-            "prolonged drawdowns that single-crash scenarios miss."
+    fig = go.Figure()
+    for s, r in scenarios.items():
+        fig.add_trace(
+            go.Bar(name=s, x=["VaR", "ES"], y=[abs(r.var), abs(r.es)])
         )
-    else:
-        st.warning(
-            "No stress scenarios available for selected date range."
+    fig.update_layout(
+        title="Stress Scenario Comparison",
+        yaxis_title="Loss Magnitude",
+        barmode="group",
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.divider()
+
+    # Waterfall chart
+    st.subheader("Stress Escalation Waterfall")
+    try:
+        baseline_va = abs(alpha_results[0.975].var) if not using_default else abs(
+            np.percentile(defaults["returns"], 2.5)
         )
+        waterfall_fig = plot_scenario_waterfall(scenarios, baseline_va)
+        st.plotly_chart(waterfall_fig, use_container_width=True)
+    except Exception as e:
+        st.warning(f"Could not render waterfall chart: {e}")
+
+    st.caption(
+        "The waterfall shows how VaR magnitude escalates from baseline "
+        "(full-sample) → crisis scenarios → worst historical window. "
+        "Each step represents the additional risk revealed by stress "
+        "testing beyond normal-market VaR."
+    )
+
+    # Regulatory context
+    st.subheader("Regulatory Context")
+    with st.expander("How Stress Tests Feed Into Capital Requirements"):
+        st.markdown("""
+        **Basel III / FRTB Framework:**
+
+        1. **VaR-based capital** (day-to-day): Uses the VaR model
+           calibrated to a 1-year window with 97.5% ES
+
+        2. **Stressed VaR / ES** (crisis-period calibration): Computed
+           over a 12-month period of significant financial stress. In
+           this dashboard: the COVID-19 crash (Feb–Mar 2020) or the
+           worst auto-detected window.
+
+        3. **Capital floor:** The higher of:
+           - Current VaR × multiplier (3.0–4.0, from traffic light)
+           - Stressed VaR × multiplier
+           - Standardized Approach (SA-CCR) capital charge
+
+        **Key insight:** Stress testing is not optional — it directly
+        determines regulatory capital. A model that passes backtesting
+        in normal markets but fails under stress produces capital
+        requirements that are 1.5–3x higher.
+        """)
+
+    # Severity ranking
+    st.subheader("Scenario Severity Ranking")
+    severity_data = pd.DataFrame([
+        {"Scenario": s, "|VaR|": abs(r.var), "|ES|": abs(r.es),
+         "Cumul. P&L": r.pnl, "Worst Day": r.worst_day}
+        for s, r in scenarios.items()
+    ]).sort_values("|VaR|", ascending=False)
+    st.dataframe(severity_data, use_container_width=True)
+
+    st.caption(
+        "**Finding (from notebooks):** Crisis-period VaR is 2–5x "
+        "higher than full-sample VaR. COVID-19 crash produced the "
+        "largest volatility spike in the 2010–2025 sample, with a "
+        "5.3x VaR multiplier. The worst auto-detected window captures "
+        "prolonged drawdowns that single-crash scenarios miss."
+    )
