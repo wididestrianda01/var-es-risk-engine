@@ -81,6 +81,22 @@ load_data() ──→ prices, returns  [@st.cache_data, TTL 3600]
 - `fit_garch_grid()` runs on load to populate Model Deep-Dive tab
 - VaR/ES computed at all 3 confidence levels for multi-alpha displays
 
+## Asset Universe Alignment
+
+Dashboard must use the same 5 Swedish equities as the notebooks. This is critical: all educational content (EGARCH-t selection, leverage effect systematic presence, half-life estimates, correlation structure) is derived from the Swedish equity universe. Showing different assets would break the narrative.
+
+**Asset universe** (from Notebook 01, Cell 6):
+
+| Ticker | Display Name | Description |
+|--------|-------------|-------------|
+| `^OMX` | OMXS30 | Swedish broad market index |
+| `ERIC-B.ST` | Ericsson | Telecom equipment |
+| `VOLV-B.ST` | Volvo | Industrial/automotive |
+| `HM-B.ST` | H&M | Consumer retail |
+| `SWED-A.ST` | Swedbank | Financial/banking |
+
+Current dashboard uses `["^OMX", "^GSPC", "AAPL", "MSFT", "EURSEK=X"]` — this must be replaced. The notebook names mapping (`NAME_MAP`) should be used in the sidebar selectbox for readable display names.
+
 ## Key Design Decisions
 
 1. **Single file.** No splitting `streamlit_app.py`. 7 tabs in one file with `st.tabs()`. Streamlit handles this cleanly.
@@ -89,6 +105,7 @@ load_data() ──→ prices, returns  [@st.cache_data, TTL 3600]
 4. **Helper functions for plots.** Extract each new chart into a named function (`_plot_conditional_vol()`, `_plot_tail_comparison()`, etc.) to keep tab code readable.
 5. **Static educational content.** Notebook findings are hardcoded narrative — not live analysis. Avoids recomputation overhead and keeps dashboard fast.
 6. **Per-tab controls.** Sidebar shows contextual controls based on active tab via `st.session_state` (e.g., Model Deep-Dive shows asset selector, Methodology shows distribution selector).
+7. **Same asset universe as notebooks.** Dashboard and notebooks use identical 5 Swedish equities so educational content directly matches live results.
 
 ## Error Handling
 
@@ -116,7 +133,7 @@ load_data() ──→ prices, returns  [@st.cache_data, TTL 3600]
 - `tests/` directory
 - `notebooks/` directory
 - Data pipeline (`data/` directory)
-- Sidebar core controls (ticker, alpha, horizon, method, GARCH toggle, date range)
+- Sidebar core controls: alpha, horizon, method, GARCH toggle, date range (ticker list replaced with Swedish equity universe per Asset Universe Alignment)
 
 ## Tab Detail Specifications
 
