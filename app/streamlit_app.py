@@ -245,13 +245,84 @@ if not data_ok:
 
 # ── Tabs ─────────────────────────────────────────────────────────────────────
 
-tab1, tab2, tab3, tab4 = st.tabs(
-    ["Risk Snapshot", "Method Comparison", "Backtesting", "Stress Tests"]
-)
+( tab_exec, tab_snapshot, tab_compare, tab_model,
+  tab_methods, tab_backtest, tab_stress ) = st.tabs([
+    "Executive Summary", "Risk Snapshot", "Method Comparison",
+    "Model Deep-Dive", "Methodology", "Backtesting", "Stress Tests"
+])
 
-# ── Tab 1: Risk Snapshot ─────────────────────────────────────────────────────
+# ── Tab 1: Executive Summary ────────────────────────────────────────────────
 
-with tab1:
+with tab_exec:
+    st.header("VaR & Expected Shortfall Risk Engine")
+
+    st.markdown("""
+    A **production-grade risk measurement and validation pipeline** for
+    Swedish equities, built to FRTB (2019) and Basel III regulatory standards.
+
+    **What this dashboard demonstrates:**
+    - **Volatility modeling** — GARCH/EGARCH with grid search across
+      specifications and distributions, selected by AICc
+    - **Risk measurement** — VaR and Expected Shortfall via Historical,
+      Parametric (Normal & Student-t), and Monte Carlo methods
+    - **Model validation** — Kupiec, Christoffersen, and Acerbi-Szekely
+      backtests with Basel Traffic Light classification
+    - **Stress testing** — Historical scenario analysis and worst-window
+      detection
+    """)
+
+    st.divider()
+
+    # Spotlight metrics
+    col1, col2, col3 = st.columns(3)
+    col1.metric(
+        "Best GARCH Model",
+        f"{garch_result.vol}({garch_result.p},{garch_result.q})-{garch_result.dist}" if use_garch and garch_result else "N/A",
+        delta=f"AICc: {garch_result.aicc:.1f}" if use_garch and garch_result else None,
+        help="AICc-optimal volatility specification selected via grid search across 16 model combinations"
+    )
+    col2.metric(
+        "Current VaR (97.5%)", f"{alpha_results[0.975].var:.4%}",
+        delta=f"Method: {method.capitalize()}",
+        help="1-day VaR at FRTB 97.5% confidence level"
+    )
+    col3.metric(
+        "Data Coverage",
+        f"{len(returns):,d} obs",
+        delta=f"{date_range[0]} → {date_range[1]}",
+        help="Daily log returns from Yahoo Finance"
+    )
+
+    st.divider()
+
+    # Pipeline flow diagram
+    st.subheader("Analysis Pipeline")
+
+    pipe_cols = st.columns(5)
+    pipe_steps = [
+        ("📊", "Data\nExploration", "Stylised facts,\nfat tails, ADF"),
+        ("📈", "GARCH\nModeling", "Grid search,\nEGARCH selection"),
+        ("📉", "VaR & ES\nComputation", "4 methods,\n3 confidence levels"),
+        ("✅", "Backtesting", "Kupiec, Christoffersen,\nAcerbi-Szekely"),
+        ("⚠️", "Stress\nTesting", "Historical scenarios,\nworst window"),
+    ]
+    for col, (emoji, title, desc) in zip(pipe_cols, pipe_steps):
+        with col:
+            st.markdown(f"### {emoji}")
+            st.markdown(f"**{title}**")
+            st.caption(desc)
+
+    st.info(
+        "**Data provenance:** All analysis uses 5 Swedish equities "
+        "(OMXS30 index + Ericsson, Volvo, H&M, Swedbank) with daily "
+        "log returns from 2010–2025. The full analytical pipeline is "
+        "documented in Jupyter notebooks (01–05) in the `notebooks/` "
+        "directory."
+    )
+
+# ── Tab 2: Risk Snapshot ────────────────────────────────────────────────────
+
+with tab_snapshot:
     st.header("Risk Snapshot")
 
     col1, col2, col3 = st.columns(3)
@@ -291,9 +362,57 @@ with tab1:
         f"α: {result.alpha} | Horizon: {result.horizon}d"
     )
 
-# ── Tab 2: Method Comparison ─────────────────────────────────────────────────
+    # GARCH model summary card
+    if use_garch and garch_result and hasattr(garch_result, 'params'):
+        with st.expander("GARCH Model Summary", expanded=False):
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Model", f"{garch_result.vol}({garch_result.p},{garch_result.q})")
+            c2.metric("Distribution", garch_result.dist.capitalize())
+            c3.metric("AICc", f"{garch_result.aicc:.1f}")
+            # Persistence = alpha1 + beta1 (sum of ARCH + GARCH terms)
+            alpha_keys = [k for k in garch_result.params if 'alpha' in k]
+            beta_keys = [k for k in garch_result.params if 'beta' in k]
+            persistence = sum(abs(garch_result.params[k]) for k in alpha_keys + beta_keys)
+            half_life = np.log(0.5) / np.log(max(persistence, 0.001)) if 0 < persistence < 1 else float('inf')
+            c4.metric("Half-Life", f"{half_life:.0f} days" if half_life < 1e6 else "∞")
+            st.caption(
+                f"**Interpretation:** Volatility shocks decay by 50% in "
+                f"approximately {half_life:.0f} trading days. "
+                f"The {garch_result.vol} specification captures "
+                f"{'leverage effects' if garch_result.vol == 'EGARCH' else 'symmetric volatility responses'} — "
+                f"negative returns {'increase' if garch_result.vol == 'EGARCH' else 'have the same impact on'} "
+                f"future volatility as positive returns."
+            )
 
-with tab2:
+    with st.expander("How to Read This Chart", expanded=False):
+        st.markdown("""
+        **Histogram:** Shows the empirical distribution of daily log returns.
+        The shape reveals key risk features:
+        - **Fat tails** (more observations at extremes than Normal predicts)
+          → why parametric-Normal VaR underestimates risk
+        - **Peaked center** → returns cluster near zero most days
+
+        **VaR (red dashed line):** The loss threshold exceeded only
+        $(1 - \\alpha) \\times 100\\%$ of the time. At 97.5%, expect
+        2-3 breaches per 100 trading days.
+
+        **ES (red dotted line):** The *average* loss on days when VaR is
+        breached — always more severe than VaR. ES is the FRTB-preferred
+        risk measure because it accounts for tail severity beyond the
+        threshold.
+        """)
+
+    st.caption(
+        "ES ≥ VaR (always): Expected Shortfall is mathematically "
+        "guaranteed to be at least as large as VaR in absolute value "
+        "— it measures the average of all tail losses, not just the "
+        "threshold. This 'coherence' property makes ES the FRTB-standard "
+        "risk measure."
+    )
+
+# ── Tab 3: Method Comparison ─────────────────────────────────────────────────
+
+with tab_compare:
     st.header("Method Comparison")
 
     methods = ["historical", "parametric", "mc"]
@@ -346,9 +465,28 @@ with tab2:
     )
     st.plotly_chart(fig, use_container_width=True)
 
-# ── Tab 3: Backtesting ───────────────────────────────────────────────────────
+# ── Tab 4: Model Deep-Dive ──────────────────────────────────────────────────
 
-with tab3:
+with tab_model:
+    st.header("Model Deep-Dive")
+    st.info(
+        "GARCH residual diagnostics, QQ plots, and conditional "
+        "volatility decomposition — coming in the next enhancement."
+    )
+
+# ── Tab 5: Methodology ──────────────────────────────────────────────────────
+
+with tab_methods:
+    st.header("Methodology Reference")
+    st.info(
+        "Detailed descriptions of VaR/ES calculation methods, "
+        "distributional assumptions, and FRTB framework — coming "
+        "in the next enhancement."
+    )
+
+# ── Tab 6: Backtesting ──────────────────────────────────────────────────────
+
+with tab_backtest:
     st.header("Backtesting")
 
     est_window = 500
@@ -439,9 +577,9 @@ with tab3:
     )
     st.plotly_chart(fig, use_container_width=True)
 
-# ── Tab 4: Stress Tests ──────────────────────────────────────────────────────
+# ── Tab 7: Stress Tests ──────────────────────────────────────────────────────
 
-with tab4:
+with tab_stress:
     st.header("Stress Tests")
 
     ret_series = pd.Series(
