@@ -19,7 +19,7 @@ This project is a market risk engine built to the standards expected of a Risk A
 - Models time-varying volatility with GARCH(1,1) and EGARCH, selected by grid search
 - Backtests VaR forecasts with Kupiec (1995) and Christoffersen (1998) tests
 - Classifies model performance under the Basel traffic light system
-- Runs historical stress scenarios (2008 GFC, 2020 COVID) and sensitivity shocks
+- Runs historical stress scenarios (COVID 2020 crash, worst 12-month window) and sensitivity shocks
 - Wraps everything in a Streamlit dashboard for interactive exploration
 
 **Regulatory context:** Under Basel III's Fundamental Review of the Trading Book (FRTB, BCBS 2019), Expected Shortfall at 97.5% confidence replaces VaR at 99% as the primary risk measure for market risk capital. This engine frames all outputs against that regulatory standard.
@@ -40,7 +40,7 @@ $$\text{ES}_{\alpha} = \mathbb{E}[L \mid L > \text{VaR}_{\alpha}]$$
 
 ### Why ES replaces VaR
 
-VaR is **not a coherent risk measure** — it fails the subadditivity axiom (Artzner et al., 1999). Diversification can *increase* measured VaR, which is a perverse incentive for a risk manager. ES satisfies all four coherence axioms: monotonicity, subadditivity, positive homogeneity, and translational invariance. FRTB mandates ES at 97.5% for this reason.
+VaR is **not a coherent risk measure**. It fails the subadditivity axiom (Artzner et al., 1999): diversification can *increase* measured VaR, a perverse outcome for a risk manager. ES satisfies all four coherence axioms — monotonicity, subadditivity, positive homogeneity, and translational invariance. FRTB mandates ES at 97.5% for this reason.
 
 ### Basel traffic light system
 
@@ -56,6 +56,8 @@ The multiplier scales a bank's market risk capital requirement. A red zone trigg
 
 ## Methodology
 
+![Methodology](img/methodology.png)
+
 The engine follows four stages: volatility modeling, risk measurement, backtesting, and stress testing.
 
 ### Stage 1: GARCH volatility modeling (`src/garch.py`)
@@ -67,9 +69,17 @@ $$\sigma_t^2 = \omega + \alpha \varepsilon_{t-1}^2 + \beta \sigma_{t-1}^2$$
 where $\sigma_t^2$ is conditional variance, $\varepsilon_{t-1}$ is the previous period's innovation, and $\omega, \alpha, \beta$ are estimated by maximum likelihood.
 
 The module supports:
-- **GARCH and EGARCH** — EGARCH captures the leverage effect (negative returns increase volatility more than positive returns of equal size)
-- **Normal and Student-t error distributions** — the t-distribution handles fat tails better
-- **Grid search** via `fit_garch_grid()` — tries all combinations of (p,q), vol model, and distribution, selecting by AICc
+- **GARCH and EGARCH** — EGARCH captures the leverage effect (negative returns increase volatility more than positive returns of equal size). The EGARCH(1,1) specification:
+
+  $$\ln\sigma_t^2 = \omega + \alpha\left|\frac{\varepsilon_{t-1}}{\sigma_{t-1}}\right| + \gamma\frac{\varepsilon_{t-1}}{\sigma_{t-1}} + \beta\ln\sigma_{t-1}^2$$
+
+  where $\gamma < 0$ indicates the leverage effect — negative shocks raise volatility more than positive ones.
+- **Normal and Student-t error distributions** — the t-distribution handles fat tails better. The degrees of freedom parameter controls tail heaviness; lower df = fatter tails.
+- **Grid search** via `fit_garch_grid()` — tries all combinations of (p,q), vol model, and distribution, selecting by AICc:
+
+  $$\text{AICc} = \text{AIC} + \frac{2k(k+1)}{n-k-1}$$
+
+  where $k$ is the number of parameters and $n$ the sample size. AICc penalizes complexity more than AIC in small samples, guarding against overfitting the volatility dynamics.
 - **Multi-asset fitting** — one GARCH model per asset for portfolio use
 
 Core functions: `fit_garch()`, `fit_garch_grid()`, `forecast_vol()`
@@ -81,7 +91,7 @@ Three methods behind a single `compute_var_es()` interface:
 **Historical simulation**
 $$\text{VaR}_{\alpha} = \text{Percentile}(\{r_t\}_{t=1}^T, 1-\alpha)$$
 
-The empirical quantile of sorted historical returns. No distributional assumption. Optionally scales returns by the ratio of current GARCH volatility to historical volatility for a conditional adjustment.
+The empirical quantile of sorted historical returns. No distributional assumption. When GARCH conditional volatility is available, each historical return is scaled by the ratio $\sigma_t^{\text{GARCH}} / \sigma^{\text{hist}}$ — this inflates or deflates historical returns to reflect current market conditions. Without GARCH scaling, a calm historical period can produce VaR estimates that are dangerously low when volatility spikes.
 
 Non-parametric and captures the empirical tail shape. Slow to react to regime changes and sensitive to window length.
 
@@ -101,9 +111,9 @@ Simulates return paths via Geometric Brownian Motion:
 
 $$S_T = S_0 \cdot \exp\left[(\mu - \tfrac{1}{2}\sigma^2)T + \sigma\sqrt{T} \cdot Z\right], \quad Z \sim \mathcal{N}(0,1)$$
 
-Uses antithetic variates for variance reduction and GARCH conditional volatility when available. The $\alpha$-quantile of simulated terminal returns gives VaR.
+Uses **antithetic variates** for variance reduction: each random draw $Z$ is paired with $-Z$, forcing the empirical mean of the sample to exactly 0 and halving the Monte Carlo standard error for a given number of paths. GARCH conditional volatility replaces the constant $\sigma$ when available, making simulated paths responsive to current market conditions. The $\alpha$-quantile of simulated terminal returns gives VaR; ES is the mean of returns below that quantile.
 
-Captures non-linearity and works for any payoff structure. Heavier to compute and sensitive to GBM assumptions.
+Captures non-linearity and works for any payoff structure. Heavier to compute and sensitive to GBM assumptions (constant drift, continuous paths, Normal innovations).
 
 **Portfolio VaR** (`compute_portfolio_var_es()`) aggregates weighted asset returns and applies the chosen method to the portfolio-level series.
 
@@ -112,35 +122,45 @@ Captures non-linearity and works for any payoff structure. Heavier to compute an
 **Kupiec POF test (1995)**
 A likelihood ratio test of whether observed breach frequency matches the expected rate $1-\alpha$:
 
-$$LR_{\text{POF}} = -2\ln\left(\frac{(1-\alpha)^{T-x}\alpha^x}{(1-x/T)^{T-x}(x/T)^x}\right) \sim \chi^2(1)$$
+$$LR_{\text{POF}} = -2\ln\left(\frac{(1-\alpha)^{x}\,\alpha^{\,T-x}}{(x/T)^{x}\,(1-x/T)^{T-x}}\right) \;\sim\; \chi^2_{(1)}$$
 
 Null hypothesis: the breach rate equals $1-\alpha$. Rejection means the VaR model is miscalibrated.
 
 **Christoffersen conditional coverage test (1998)**
-Extends Kupiec by testing whether breaches are independent (not clustered). Models the breach sequence as a first-order Markov chain:
+Extends Kupiec by testing whether breaches are independent (not clustered). Models the breach sequence as a first-order Markov chain with transition probabilities $\pi_{ij} = P(I_t = j \mid I_{t-1} = i)$:
 
-$$LR_{\text{CC}} = LR_{\text{POF}} + LR_{\text{Independence}}$$
+$$LR_{\text{Ind}} = -2\ln\left(\frac{(1-\pi)^{n_{00}+n_{10}}\,\pi^{n_{01}+n_{11}}}{(1-\pi_0)^{n_{00}}\,\pi_0^{n_{01}}\,(1-\pi_1)^{n_{10}}\,\pi_1^{n_{11}}}\right) \;\sim\; \chi^2_{(1)}$$
+
+where $\pi_0 = n_{01}/(n_{00}+n_{01})$ and $\pi_1 = n_{11}/(n_{10}+n_{11})$ are the conditional breach probabilities, and $\pi = (n_{01}+n_{11})/n$ is the unconditional rate. Large $LR_{\text{Ind}}$ means yesterday's breach predicts today's breach.
+
+The full conditional coverage test combines both:
+
+$$LR_{\text{CC}} = LR_{\text{POF}} + LR_{\text{Ind}} \;\sim\; \chi^2_{(2)}$$
 
 Breaches that cluster during crisis periods signal that the model does not adapt to volatility regimes — a problem for regulatory approval.
 
-**Acerbi-Szekely Z2 test**
-Direct backtest for Expected Shortfall. Tests whether realized returns on breach days match the ES forecast:
+**Acerbi-Szekely Z2 test (2014)**
+A direct backtest for Expected Shortfall — unlike Kupiec and Christoffersen which only test VaR breach frequency. The Z2 statistic measures whether realized returns on breach days are consistent with the ES forecast:
 
 $$Z_2 = \frac{1}{n}\sum_{t=1}^{n} \frac{R_t}{\text{ES}_t} \cdot \mathbf{1}_{\{R_t \leq \text{VaR}_t\}} + 1$$
 
-P-values are computed by Monte Carlo simulation under the null of correctly specified ES.
+Under the null of correctly specified ES, $\mathbb{E}[Z_2] = 1$ — the expected return on a breach day, expressed as a fraction of ES, should equal 1. If $Z_2$ is significantly below 1, ES forecasts are too optimistic (underestimating tail loss). If above 1, ES is too conservative.
+
+P-values are computed by Monte Carlo simulation: breach days are randomly reshuffled under the null, and the distribution of Z2 under no timing skill is compared to the observed value.
 
 **Basel traffic light** (`traffic_light()`)
-Implements both the Basel II (1996) and FRTB (2019) traffic light frameworks.
+Implements both the Basel II (1996) and FRTB (2019) traffic light frameworks for supervisory backtest evaluation. Basel II (1996) uses a 250-day window with a multiplier-based penalty system. FRTB (2019) uses separate 99% VaR and 97.5% ES thresholds.
 
 ### Stage 4: Stress testing (`src/stress_test.py`)
 
 Historical scenario replay and sensitivity analysis:
-- `run_historical_scenario()` — computes VaR/ES over predefined stress periods (2008 GFC, 2020 COVID)
+- `run_historical_scenario()` — computes VaR/ES over predefined stress periods (COVID 2020 crash)
 - `find_worst_window()` — finds the worst rolling return window in the dataset
 - `sensitivity_shocks()` — applies user-defined factor shocks to asset returns
 
 ## Results
+
+![Risk Snapshot](img/risk_snapshot.png)
 
 Representative results for OMXS30 (Swedish large-cap index) over a 5-year window, with GARCH(1,1) conditional volatility:
 
@@ -213,7 +233,7 @@ Five Jupyter notebooks walk through the risk modeling pipeline from data to back
 2. **02_garch_volatility.ipynb** — GARCH(1,1) and EGARCH fitting, model selection by AICc, conditional volatility plots
 3. **03_var_methods.ipynb** — Historical, Parametric, and Monte Carlo VaR and ES, side-by-side comparison
 4. **04_backtesting.ipynb** — Kupiec POF, Christoffersen conditional coverage, Acerbi-Szekely ES test, traffic light
-5. **05_stress_testing.ipynb** — 2008 GFC and 2020 COVID scenarios, worst-window analysis, sensitivity shocks
+5. **05_stress_testing.ipynb** — COVID 2020 crash, worst-window analysis, sensitivity shocks
 
 To run them: `jupyter notebook` and open any file in `notebooks/`.
 
