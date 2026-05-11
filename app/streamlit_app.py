@@ -527,10 +527,20 @@ with tab_model:
 
     if not use_garch:
         st.info("Enable 'Use GARCH volatility' in the sidebar to see model diagnostics.")
-    elif garch_grid_result is None:
-        st.warning("GARCH grid search did not converge for this asset. Try a different ticker or date range.")
     else:
+        # Determine data source: live or default
         gr = garch_grid_result
+        using_default = False
+        if gr is None:
+            gr = defaults["garch_grid"]
+            using_default = True
+
+        if using_default:
+            st.info(
+                "**Showing default view (OMXS30, 2010–2025).** "
+                "Grid search did not converge for current selection. "
+                "Try a wider date range or different asset."
+            )
 
         st.subheader("Model Selection: Grid Search Results")
 
@@ -547,7 +557,6 @@ with tab_model:
             includes a finite-sample correction.
             """)
 
-        # Grid search result summary
         st.markdown(f"""
         **Selected Model:** **{gr.vol}({gr.p},{gr.q})-{gr.dist}**
         | AICc: {gr.aicc:.1f} | AIC: {gr.aic:.1f} | BIC: {gr.bic:.1f}
@@ -563,10 +572,15 @@ with tab_model:
         persistence, half_life = _volatility_persistence(gr.params)
 
         col1, col2 = st.columns(2)
-        col1.metric("Volatility Persistence", f"{persistence:.4f}",
-                     delta="Stationary" if persistence < 1 else "Non-stationary")
-        col2.metric("Half-Life", f"{half_life:.0f} trading days" if half_life < 1e6 else "∞",
-                     delta=f"~{half_life/252:.1f} years" if half_life < 1e6 else None)
+        col1.metric(
+            "Volatility Persistence", f"{persistence:.4f}",
+            delta="Stationary" if persistence < 1 else "Non-stationary"
+        )
+        col2.metric(
+            "Half-Life",
+            f"{half_life:.0f} trading days" if half_life < 1e6 else "∞",
+            delta=f"~{half_life/252:.1f} years" if half_life < 1e6 else None
+        )
 
         # Conditional volatility plot
         st.subheader("Conditional Volatility")
@@ -576,7 +590,10 @@ with tab_model:
             "market stress events."
         )
         try:
-            vol_fig = plot_conditional_vol(gr, NAME_MAP[ticker], date_range)
+            display_name = NAME_MAP[ticker] if not using_default else "OMXS30 (default)"
+            display_date_range = date_range if not using_default else (
+                pd.Timestamp("2010-01-01"), pd.Timestamp("2025-12-31"))
+            vol_fig = plot_conditional_vol(gr, display_name, display_date_range)
             st.plotly_chart(vol_fig, use_container_width=True)
         except Exception as e:
             st.warning(f"Could not render conditional volatility plot: {e}")
@@ -584,15 +601,20 @@ with tab_model:
         # Standardized residuals
         st.subheader("Model Diagnostics: Standardized Residuals")
         if hasattr(gr, 'cond_vol') and len(gr.cond_vol) > 1:
-            std_resid = returns[-len(gr.cond_vol):] / np.maximum(gr.cond_vol, 1e-10)
+            # Get returns matching the cond_vol length for defaults
+            resid_returns = (
+                returns[-len(gr.cond_vol):] if not using_default
+                else defaults["returns"][-len(gr.cond_vol):]
+            )
+            std_resid = resid_returns / np.maximum(gr.cond_vol, 1e-10)
 
             col1, col2 = st.columns(2)
             with col1:
-                qq_fig = plot_qq_residuals(std_resid, gr.dist, NAME_MAP[ticker])
+                resid_display_name = display_name if not using_default else "OMXS30"
+                qq_fig = plot_qq_residuals(std_resid, gr.dist, resid_display_name)
                 st.plotly_chart(qq_fig, use_container_width=True)
 
             with col2:
-                # ACF of squared standardized residuals
                 from statsmodels.tsa.stattools import acf
                 sq_resid = std_resid ** 2
                 acf_vals = acf(sq_resid, nlags=20)
@@ -623,7 +645,34 @@ with tab_model:
                 "no significant autocorrelation (bars within the 95% CI)."
             )
 
-        # EGARCH leverage explainer (if applicable)
+        # News impact curve (new)
+        st.subheader("News Impact Curve")
+        with st.expander("What is the News Impact Curve?"):
+            st.markdown("""
+            The **news impact curve** (Engle & Ng, 1993) shows how
+            yesterday's return shock (ε_{t-1}) affects today's
+            volatility forecast (σ²_t).
+
+            **For GARCH:** The curve is symmetric — positive and negative
+            shocks of equal size produce identical volatility increases.
+            This assumes no leverage effect.
+
+            **For EGARCH:** The curve is asymmetric — negative shocks
+            (market declines) produce larger volatility increases than
+            positive shocks (market gains) of the same magnitude.
+            This is the **leverage effect**: bad news increases future
+            volatility more than good news.
+
+            **γ < 0** → negative shocks amplify volatility more.
+            This is the canonical pattern for equity markets.
+            """)
+        try:
+            nic_fig = plot_news_impact_curve(gr)
+            st.plotly_chart(nic_fig, use_container_width=True)
+        except Exception as e:
+            st.warning(f"Could not render news impact curve: {e}")
+
+        # EGARCH leverage explainer
         if gr.vol == "EGARCH":
             st.subheader("Leverage Effect (EGARCH)")
             gamma_keys = [k for k in gr.params if 'gamma' in k]
