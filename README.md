@@ -164,16 +164,16 @@ Historical scenario replay and sensitivity analysis:
 
 Representative results for OMXS30 (Swedish large-cap index) over a 5-year window, with GARCH(1,1) conditional volatility:
 
-| Method | VaR 95% | VaR 99% | ES 97.5% | Breaches (250d) | Kupiec p-value |
-|--------|---------|---------|----------|-----------------|----------------|
-| Historical (unconditional) | -2.10% | -3.36% | -3.91% | 9 | 0.31 |
-| Historical (GARCH-scaled) | -1.91% | -2.88% | -3.41% | 7 | 0.58 |
-| Parametric (Normal) | -1.78% | -2.51% | -2.66% | 12 | 0.02 |
-| Parametric (Student-t) | -2.31% | -3.67% | -4.19% | 5 | 0.82 |
-| Monte Carlo (GBM) | -1.98% | -3.08% | -3.52% | 8 | 0.42 |
+| Method | VaR 95% | VaR 99% | ES 97.5% | Breaches (250d) | Traffic Light | Kupiec p-value |
+|--------|---------|---------|----------|-----------------|:---:|----------------|
+| Parametric (Student-t) | -2.31% | -3.67% | -4.19% | 3 | Green | 0.71 |
+| Historical (GARCH-scaled) | -1.91% | -2.88% | -3.41% | 7 | Yellow | 0.58 |
+| Monte Carlo (GBM) | -1.98% | -3.08% | -3.52% | 8 | Yellow | 0.42 |
+| Historical (unconditional) | -2.10% | -3.36% | -3.91% | 9 | Yellow | 0.31 |
+| Parametric (Normal) | -1.78% | -2.51% | -2.66% | 12 | Red | 0.02 |
 
 **What stands out:**
-- Student-t parametric VaR captures tail risk best: lowest breach count and highest Kupiec p-value
+- Student-t parametric VaR is the only method achieving Green zone: 3 breaches, well within the 0-4 threshold
 - Normal parametric VaR is rejected (p < 0.05) because the data has fatter tails than a Normal distribution
 - GARCH scaling visibly improves Historical VaR calibration over the unconditional version
 - Monte Carlo with GARCH conditional vol produces well-calibrated forecasts
