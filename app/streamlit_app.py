@@ -9,16 +9,18 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-from plotly.subplots import make_subplots
 
 from src.backtest import (acerbi_szekely_z2, christoffersen_test, kupiec_test,
                           traffic_light)
 from src.garch import fit_garch
 from src.stress_test import find_worst_window, run_historical_scenario
 from src.utils import compute_returns, fetch_prices
-from scipy import stats as sp_stats
 
 from src.var_methods import compute_var_es
+
+from app.charts import (plot_breach_timeline, plot_conditional_vol,
+                        plot_distribution_overlay, plot_qq_residuals,
+                        plot_scenario_waterfall)
 
 # ── Constants: Swedish equity universe (aligned with notebooks) ──────────
 
@@ -91,148 +93,6 @@ def _volatility_persistence(params):
         else float("inf")
     )
     return persistence, half_life
-
-
-# ── Plot Helper Functions ──────────────────────────────────────────────────
-
-def _plot_distribution_overlay(returns, result, alpha):
-    """Normal PDF vs Student-t PDF vs empirical histogram with VaR line."""
-    fig = go.Figure()
-    fig.add_trace(go.Histogram(
-        x=returns, nbinsx=60, histnorm="probability density",
-        name="Empirical", marker_color="lightblue", opacity=0.6
-    ))
-    x_range = np.linspace(returns.min(), returns.max(), 200)
-    mu, sigma = np.mean(returns), np.std(returns, ddof=1)
-    fig.add_trace(go.Scatter(
-        x=x_range, y=sp_stats.norm.pdf(x_range, mu, sigma),
-        name="Normal Fit", line=dict(color="orange", dash="dash")
-    ))
-    df_t, loc_t, scale_t = sp_stats.t.fit(returns)
-    fig.add_trace(go.Scatter(
-        x=x_range, y=sp_stats.t.pdf(x_range, df_t, loc_t, scale_t),
-        name=f"Student-t Fit (ν={df_t:.1f})",
-        line=dict(color="green", dash="dot")
-    ))
-    fig.add_vline(x=result.var, line_dash="dash", line_color="red",
-                  annotation_text=f"VaR {alpha:.1%}")
-    fig.update_layout(
-        title="Return Distribution: Empirical vs Theoretical Fits",
-        xaxis_title="Log Return", yaxis_title="Density",
-        bargap=0.05
-    )
-    return fig
-
-
-def _plot_conditional_vol(garch_result, ticker_name):
-    """Conditional volatility time series with crisis annotations."""
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        y=garch_result.cond_vol,
-        name="Conditional Volatility",
-        line=dict(color="steelblue", width=1.5)
-    ))
-    # COVID-19 shaded region (approximate position — assumes 2010-2025 data, ~250 days/yr)
-    n = len(garch_result.cond_vol)
-    fig.add_vrect(
-        x0=n - 1300, x1=n - 1220,
-        fillcolor="red", opacity=0.1,
-        annotation_text="COVID-19 Crash"
-    )
-    fig.update_layout(
-        title=f"GARCH Conditional Volatility — {ticker_name}",
-        xaxis_title="Date", yaxis_title="Daily Volatility"
-    )
-    return fig
-
-
-def _plot_qq_residuals(std_residuals, dist_name, ticker_name):
-    """QQ plot of standardized residuals against theoretical distribution."""
-    fig = go.Figure()
-    n = len(std_residuals)
-    theoretical = sp_stats.norm.ppf((np.arange(1, n + 1) - 0.5) / n)
-    fig.add_trace(go.Scatter(
-        x=theoretical, y=np.sort(std_residuals),
-        mode="markers", name="Residuals",
-        marker=dict(color="steelblue", size=4, opacity=0.5)
-    ))
-    lo, hi = theoretical.min(), theoretical.max()
-    fig.add_trace(go.Scatter(
-        x=[lo, hi], y=[lo, hi],
-        name="Normal Reference", line=dict(color="red", dash="dash")
-    ))
-    fig.update_layout(
-        title=f"QQ Plot of Standardized Residuals — {ticker_name} ({dist_name})",
-        xaxis_title="Theoretical Quantiles (Normal)",
-        yaxis_title="Sample Quantiles"
-    )
-    return fig
-
-
-def _plot_half_life_comparison(half_lives, asset_names):
-    """Horizontal bar chart comparing volatility half-life across assets."""
-    fig = go.Figure()
-    fig.add_trace(go.Bar(
-        y=asset_names, x=half_lives, orientation="h",
-        marker_color="steelblue", text=[f"{h:.0f} days" for h in half_lives],
-        textposition="outside"
-    ))
-    fig.update_layout(
-        title="Volatility Half-Life Comparison",
-        xaxis_title="Half-Life (Trading Days)",
-        yaxis_title="",
-        xaxis=dict(range=[0, max(half_lives) * 1.3])
-    )
-    return fig
-
-
-def _plot_breach_timeline(ret_arr, breaches_99, breaches_975):
-    """Breach timeline with dual-condition overlay (FRTB-style)."""
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        y=ret_arr, name="Returns", line=dict(color="gray", width=0.5)
-    ))
-    idx_99 = np.where(breaches_99)[0]
-    idx_975 = np.where(breaches_975)[0]
-    fig.add_trace(go.Scatter(
-        x=idx_99, y=ret_arr[idx_99],
-        mode="markers", name="99% VaR Breaches",
-        marker=dict(color="red", size=8, symbol="x")
-    ))
-    idx_975_only = np.setdiff1d(idx_975, idx_99)
-    fig.add_trace(go.Scatter(
-        x=idx_975_only, y=ret_arr[idx_975_only],
-        mode="markers", name="97.5% VaR Breaches",
-        marker=dict(color="orange", size=6, symbol="triangle-up")
-    ))
-    fig.update_layout(
-        title="FRTB Dual-Condition Breach Map (99% + 97.5%)",
-        xaxis_title="Forecast Day", yaxis_title="Return"
-    )
-    return fig
-
-
-def _plot_scenario_waterfall(scenarios_dict, baseline_var):
-    """Waterfall chart: baseline VaR → crisis scenarios → worst window."""
-    names = ["Baseline"]
-    values = [abs(baseline_var)]
-    for label, r in scenarios_dict.items():
-        names.append(label)
-        values.append(abs(r.var))
-    fig = go.Figure(go.Waterfall(
-        name="VaR Magnitude", orientation="v",
-        measure=["absolute"] + ["relative"] * len(scenarios_dict),
-        x=names, y=values,
-        connector=dict(line=dict(color="gray", dash="dot")),
-        increasing=dict(marker_color="darkred"),
-        decreasing=dict(marker_color="steelblue"),
-        totals=dict(marker_color="maroon")
-    ))
-    fig.update_layout(
-        title="Stress Scenario Waterfall: VaR Magnitude Escalation",
-        yaxis_title="|VaR| (Daily Loss)"
-    )
-    return fig
 
 
 try:
@@ -494,7 +354,7 @@ with tab_compare:
 
     # Distribution overlay for current selection
     st.subheader("Distribution Fit Analysis")
-    dist_fig = _plot_distribution_overlay(returns, result, alpha)
+    dist_fig = plot_distribution_overlay(returns, result, alpha)
     st.plotly_chart(dist_fig, use_container_width=True)
 
     with st.expander("Why Distribution Choice Matters"):
@@ -596,7 +456,7 @@ with tab_model:
             "market stress events."
         )
         try:
-            vol_fig = _plot_conditional_vol(gr, NAME_MAP[ticker])
+            vol_fig = plot_conditional_vol(gr, NAME_MAP[ticker], date_range)
             st.plotly_chart(vol_fig, use_container_width=True)
         except Exception as e:
             st.warning(f"Could not render conditional volatility plot: {e}")
@@ -608,7 +468,7 @@ with tab_model:
 
             col1, col2 = st.columns(2)
             with col1:
-                qq_fig = _plot_qq_residuals(std_resid, gr.dist, NAME_MAP[ticker])
+                qq_fig = plot_qq_residuals(std_resid, gr.dist, NAME_MAP[ticker])
                 st.plotly_chart(qq_fig, use_container_width=True)
 
             with col2:
@@ -924,7 +784,7 @@ with tab_backtest:
 
     # FRTB dual-condition breach map
     st.subheader("FRTB Dual-Condition Breach Map")
-    breach_fig = _plot_breach_timeline(ret_arr, breaches, breaches_975)
+    breach_fig = plot_breach_timeline(ret_arr, breaches, breaches_975)
     st.plotly_chart(breach_fig, use_container_width=True)
 
     st.caption(
@@ -1029,7 +889,7 @@ with tab_stress:
         st.subheader("Stress Escalation Waterfall")
         try:
             baseline_va = abs(alpha_results[0.975].var)
-            waterfall_fig = _plot_scenario_waterfall(scenarios, baseline_va)
+            waterfall_fig = plot_scenario_waterfall(scenarios, baseline_va)
             st.plotly_chart(waterfall_fig, use_container_width=True)
         except Exception as e:
             st.warning(f"Could not render waterfall chart: {e}")
