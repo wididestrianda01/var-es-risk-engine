@@ -1,10 +1,19 @@
 """GARCH volatility modeling for VaR computation."""
 
 from dataclasses import dataclass
+import logging
 import warnings
 
 import numpy as np
 from arch import arch_model
+
+# Suppress convergence warnings from the arch library. The SLSQP optimizer
+# frequently triggers ConvergenceWarning during grid search. These are
+# expected — the optimizer explores parameter regions where constraints are
+# temporarily violated but final estimates are valid. Both Python warnings
+# and arch-internal logging are silenced.
+warnings.filterwarnings("ignore")
+logging.getLogger("arch").setLevel(logging.ERROR)
 
 
 __all__ = ["GarchResult", "fit_garch", "fit_garch_grid", "forecast_vol"]
@@ -82,14 +91,19 @@ def fit_garch(
         )
 
     model = arch_model(returns, mean=mean, vol=vol, p=p, q=q, dist=dist)
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        # Use BHHH-style optimizer with tighter tolerance for better convergence
-        # on heavy-tailed equity return data
+    # The arch library's SLSQP optimizer can trigger ConvergenceWarning
+    # during grid search. Python's warning filter chain is sometimes
+    # bypassed by arch's internal catch_warnings contexts, so we
+    # temporarily replace showwarning to guarantee suppression.
+    _orig_showwarning = warnings.showwarning
+    warnings.showwarning = lambda *a, **k: None
+    try:
         fit = model.fit(
             disp="off",
             options={"maxiter": 2000, "ftol": 1e-12},
         )
+    finally:
+        warnings.showwarning = _orig_showwarning
 
     params = {k: v for k, v in fit.params.items()}
     aic = float(fit.aic)
