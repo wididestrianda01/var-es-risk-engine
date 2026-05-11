@@ -838,54 +838,101 @@ with tab_backtest:
     st.header("Backtesting")
 
     est_window = 500
+    using_default = False
+    loop_failed = False
+
+    # Decide data source
     if len(returns) < est_window:
-        st.warning(
-            f"Need at least {est_window} observations for backtesting "
-            f"(have {len(returns)}). Select a wider date range."
+        using_default = True
+    else:
+        # Attempt live rolling backtest
+        var_fc, es_fc, real = [], [], []
+        var_fc_975 = []
+        prev_garch = None
+        for t in range(est_window, len(returns)):
+            train = returns[t - est_window : t]
+            try:
+                g = fit_garch(train) if use_garch else None
+                prev_garch = g
+            except Exception:
+                g = prev_garch
+                loop_failed = True
+            try:
+                r = compute_var_es(
+                    train, method=method, alpha=alpha, garch_result=g
+                )
+                var_fc.append(r.var)
+                es_fc.append(r.es)
+                real.append(returns[t])
+                r_975 = compute_var_es(
+                    train, method=method, alpha=0.975, garch_result=g
+                )
+                var_fc_975.append(r_975.var)
+            except Exception:
+                loop_failed = True
+                continue
+
+        if len(var_fc) == 0:
+            using_default = True
+
+    if using_default:
+        bt = defaults["backtest"]
+        st.info(
+            "**Showing default view (OMXS30, 2010\u20132025).** "
+            "Need at least 500 observations for backtesting. "
+            "Select a wider date range for live analysis."
         )
-        st.stop()
+        var_arr = bt["var_arr"]
+        es_arr = bt["es_arr"]
+        ret_arr = bt["ret_arr"]
+        var_975_arr = bt["breaches_975_arr"]
+        breaches = bt["breaches_arr"]
+        breaches_975 = bt["breaches_975_arr"]
+        k_test = bt["kupiec"]
+        c_test = bt["christoffersen"]
+        z2_test = bt["acerbi_szekely"]
+        tl_basel = bt["traffic_basel"]
+        tl_frtb = bt["traffic_frtb"]
+    else:
+        var_arr = np.array(var_fc)
+        es_arr = np.array(es_fc)
+        ret_arr = np.array(real)
+        var_975_arr = np.array(var_fc_975)
+        breaches = (ret_arr <= var_arr).astype(int)
+        breaches_975 = (ret_arr <= var_975_arr).astype(int)
 
-    var_fc, es_fc, real = [], [], []
-    var_fc_975 = []
+        k_test = kupiec_test(breaches.sum(), len(breaches), alpha)
+        c_test = christoffersen_test(breaches)
+        z2_test = acerbi_szekely_z2(
+            ret_arr, var_arr, es_arr, alpha, n_sim=500
+        )
+        tl_basel = traffic_light(
+            breaches.sum(), len(breaches), framework="basel1996"
+        )
+        tl_frtb = traffic_light(
+            breaches_99=breaches.sum(),
+            breaches_975=breaches_975.sum(),
+            total=len(breaches),
+            framework="frtb2019",
+        )
 
-    for t in range(est_window, len(returns)):
-        train = returns[t - est_window : t]
-        g = fit_garch(train) if use_garch else None
-        r = compute_var_es(train, method=method, alpha=alpha, garch_result=g)
-        var_fc.append(r.var)
-        es_fc.append(r.es)
-        real.append(returns[t])
-        # FRTB: also track 97.5% VaR breaches
-        r_975 = compute_var_es(train, method=method, alpha=0.975, garch_result=g)
-        var_fc_975.append(r_975.var)
+        if loop_failed:
+            st.warning(
+                "Some GARCH fits in the rolling loop failed to converge. "
+                "Results may use fallback estimates for those windows."
+            )
 
-    var_arr = np.array(var_fc)
-    es_arr = np.array(es_fc)
-    ret_arr = np.array(real)
-    var_975_arr = np.array(var_fc_975)
-    breaches = (ret_arr <= var_arr).astype(int)
-    breaches_975 = (ret_arr <= var_975_arr).astype(int)
-
-    k_test = kupiec_test(breaches.sum(), len(breaches), alpha)
-    c_test = christoffersen_test(breaches)
-    z2_test = acerbi_szekely_z2(ret_arr, var_arr, es_arr, alpha, n_sim=500)
-    tl_basel = traffic_light(breaches.sum(), len(breaches), framework="basel1996")
-    tl_frtb = traffic_light(
-        breaches_99=breaches.sum(),
-        breaches_975=breaches_975.sum(),
-        total=len(breaches),
-        framework="frtb2019",
-    )
-
+    # Metrics row
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Breaches", f"{breaches.sum()}/{len(breaches)}")
     col2.metric("Kupiec p-value", f"{k_test.p_value:.4f}")
     col3.metric("Christoffersen p-value", f"{c_test.p_value:.4f}")
     col4.metric("Acerbi-Szekely Z2", f"{z2_test.p_value:.4f}")
 
+    # Traffic light
     st.subheader("Traffic Light")
     c1, c2 = st.columns(2)
-    color = {"green": "🟢", "yellow": "🟡", "red": "🔴"}
+    color = {"green": "\U0001f7e2", "yellow": "\U0001f7e1", "red": "\U0001f534"}
     c1.metric(
         "Basel 1996",
         f"{color[tl_basel['zone']]} {tl_basel['zone']}",
@@ -897,6 +944,7 @@ with tab_backtest:
         delta=f"99%: {breaches.sum()}  |  97.5%: {breaches_975.sum()}",
     )
 
+    # Rolling backtest chart
     fig = go.Figure()
     fig.add_trace(
         go.Scatter(
@@ -925,30 +973,30 @@ with tab_backtest:
     )
     st.plotly_chart(fig, use_container_width=True)
 
-    # Test interpretation cards
+    # Test interpretation
     st.subheader("Test Interpretation")
     with st.expander("What These Tests Actually Mean"):
         st.markdown(f"""
         **Kupiec POF Test** (p = {k_test.p_value:.4f}):
         Tests whether the number of VaR breaches matches expectation.
-        - H₀: breach rate = expected rate ({1-alpha:.1%})
-        - p > 0.05 → **pass** — breaches are at acceptable frequency
-        - p < 0.05 → **fail** — model is miscalibrated
-        - Result: **{'PASS ✓' if not k_test.reject else 'FAIL ✗'}**
+        - H\u2080: breach rate = expected rate ({1-alpha:.1%})
+        - p > 0.05 \u2192 **pass** \u2014 breaches are at acceptable frequency
+        - p < 0.05 \u2192 **fail** \u2014 model is miscalibrated
+        - Result: **{'PASS \u2713' if not k_test.reject else 'FAIL \u2717'}**
 
         **Christoffersen Test** (p = {c_test.p_value:.4f}):
         Tests whether breaches are independent (not clustered).
-        - H₀: breaches are independent over time
-        - p > 0.05 → **pass** — breaches are randomly scattered
-        - p < 0.05 → **fail** — breaches cluster, model slow to adapt
-        - Result: **{'PASS ✓' if not c_test.reject else 'FAIL ✗'}**
+        - H\u2080: breaches are independent over time
+        - p > 0.05 \u2192 **pass** \u2014 breaches are randomly scattered
+        - p < 0.05 \u2192 **fail** \u2014 breaches cluster, model slow to adapt
+        - Result: **{'PASS \u2713' if not c_test.reject else 'FAIL \u2717'}**
 
         **Acerbi-Szekely Z2 Test** (p = {z2_test.p_value:.4f}):
         Tests whether ES forecasts are well-specified.
-        - H₀: ES forecasts correctly capture tail severity
-        - p > 0.05 → **pass** — ES estimates are adequate
-        - p < 0.05 → **fail** — ES is miscalibrated
-        - Result: **{'PASS ✓' if not z2_test.reject else 'FAIL ✗'}**
+        - H\u2080: ES forecasts correctly capture tail severity
+        - p > 0.05 \u2192 **pass** \u2014 ES estimates are adequate
+        - p < 0.05 \u2192 **fail** \u2014 ES is miscalibrated
+        - Result: **{'PASS \u2713' if not z2_test.reject else 'FAIL \u2717'}**
         """)
 
     # FRTB dual-condition breach map
@@ -958,12 +1006,12 @@ with tab_backtest:
 
     st.caption(
         "FRTB (2019) requires backtesting at both 99% and 97.5% "
-        "confidence: green zone if ≤12 breaches at 99% AND ≤30 at "
+        "confidence: green zone if \u226412 breaches at 99% AND \u226430 at "
         "97.5% over 250 days. Red crosses = 99% breaches. Orange "
         "triangles = 97.5% breaches only."
     )
 
-    # Traffic light summary with regulatory context
+    # Traffic light summary
     st.subheader("Regulatory Capital Multiplier")
     reg_col1, reg_col2 = st.columns(2)
     with reg_col1:
@@ -974,7 +1022,7 @@ with tab_backtest:
         )
         st.caption(
             "Basel I market risk amendment. Green zone: k=3.0 (minimum). "
-            "Yellow zone: k=3.4–3.85 (capital add-on 13–28%). "
+            "Yellow zone: k=3.4\u20133.85 (capital add-on 13\u201328%). "
             "Red zone: k=4.0 (maximum penalty)."
         )
     with reg_col2:
@@ -985,8 +1033,8 @@ with tab_backtest:
         )
         st.caption(
             "FRTB dual-condition test. Green zone requires BOTH: "
-            "≤12 breaches at 99% AND ≤30 breaches at 97.5% (over 250 days). "
-            "More stringent than Basel 1996 — single condition failure "
+            "\u226412 breaches at 99% AND \u226430 breaches at 97.5% (over 250 days). "
+            "More stringent than Basel 1996 \u2014 single condition failure "
             "triggers red zone."
         )
 
