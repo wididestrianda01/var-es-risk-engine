@@ -30,7 +30,7 @@ This project is a market risk engine built to the standards expected of a Risk A
 
 The loss that will not be exceeded with probability $1 - \alpha$ over a holding period $h$:
 
-$$\mathrm{VaR}_{\alpha} = \inf\{l \in \mathbb{R} : P(L > l) \leq 1 - \alpha\}$$
+$$\mathrm{VaR}_{\alpha} = \inf\,\lbrace\,l \in \mathbb{R} : P(L > l) \leq 1 - \alpha\,\rbrace$$
 
 ### Expected Shortfall (ES / CVaR)
 
@@ -89,7 +89,7 @@ Core functions: `fit_garch()`, `fit_garch_grid()`, `forecast_vol()`
 Three methods behind a single `compute_var_es()` interface:
 
 **Historical simulation**
-$$\mathrm{VaR}_{\alpha} = \operatorname{Percentile}(\{r_t\}_{t=1}^T, 1-\alpha)$$
+$$\mathrm{VaR}_{\alpha} = \operatorname{Percentile}\bigl(\lbrace r_t \rbrace_{t=1}^{T},\; 1-\alpha\bigr)$$
 
 The empirical quantile of sorted historical returns. No distributional assumption. When GARCH conditional volatility is available, each historical return is scaled by the ratio $\sigma_t^{\mathrm{GARCH}} / \sigma^{\mathrm{hist}}$. This adjusts historical returns to reflect current market conditions. Without GARCH scaling, a calm historical period can produce VaR estimates that are dangerously low when volatility spikes.
 
@@ -142,7 +142,7 @@ Breaches that cluster during crisis periods signal that the model does not adapt
 **Acerbi-Szekely Z2 test (2014)**
 A direct backtest for Expected Shortfall. Unlike Kupiec and Christoffersen which only test VaR breach frequency, the Z2 statistic measures whether realized returns on breach days are consistent with the ES forecast:
 
-$$Z_2 = \frac{1}{n}\sum_{t=1}^{n} \frac{R_t}{\mathrm{ES}_t} \cdot \mathbf{1}_{\{R_t \leq \mathrm{VaR}_t\}} + 1$$
+$$Z_2 = \frac{1}{n}\sum_{t=1}^{n} \frac{R_t}{\mathrm{ES}_t} \cdot \mathbf{1}_{\lbrace R_t \leq \mathrm{VaR}_t \rbrace} + 1$$
 
 Under the null of correctly specified ES, $\mathbb{E}[Z_2] = (1-\alpha) + 1$ (e.g., 1.01 at 99% confidence): the expected return on a breach day, expressed as a fraction of ES, should equal 1. If $Z_2$ is significantly below its expected value, ES forecasts are too optimistic (underestimating tail loss). If above, ES is too conservative.
 
