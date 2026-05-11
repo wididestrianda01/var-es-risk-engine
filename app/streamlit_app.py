@@ -656,12 +656,131 @@ with tab_model:
 # ── Tab 5: Methodology ──────────────────────────────────────────────────────
 
 with tab_methods:
-    st.header("Methodology Reference")
-    st.info(
-        "Detailed descriptions of VaR/ES calculation methods, "
-        "distributional assumptions, and FRTB framework — coming "
-        "in the next enhancement."
-    )
+    st.header("VaR & ES Methodology")
+
+    st.markdown("""
+    Three complementary approaches for estimating Value-at-Risk and
+    Expected Shortfall, each with different assumptions and trade-offs.
+    """)
+
+    method_tabs = st.tabs(["Historical Simulation", "Parametric", "Monte Carlo"])
+
+    with method_tabs[0]:
+        st.subheader("Historical Simulation")
+        st.markdown("""
+        **How it works:**
+        1. Take historical returns as the empirical distribution
+        2. Sort returns from worst to best
+        3. VaR = the $(1-\\alpha)$-th percentile of sorted returns
+        4. ES = average of all returns below the VaR threshold
+
+        **Pros:** No distribution assumptions. Non-parametric. Captures
+        actual tail shape including fat tails and skewness.
+
+        **Cons:** Cannot extrapolate beyond historical extremes.
+        Sensitive to the lookback window. Assumes the past distribution
+        is representative of the future.
+
+        **Best for:** Regulatory reporting where conservatism and
+        transparency are valued over statistical efficiency.
+        """)
+
+    with method_tabs[1]:
+        st.subheader("Parametric (Variance-Covariance)")
+        st.markdown("""
+        **How it works:**
+        1. Assume returns follow a specific distribution (Normal or
+           Student-t)
+        2. Estimate parameters (μ, σ) from the data
+        3. VaR = μ + z_α × σ   (where z_α is the quantile)
+        4. ES = μ − [φ(z_α)/(1−α)] × σ
+
+        **Normal assumption:**
+        - Computationally trivial — closed-form solution
+        - **Underestimates tail risk** when returns are fat-tailed
+        - Works well for short horizons with near-Normal returns
+
+        **Student-t assumption:**
+        - Accommodates fat tails via the degrees-of-freedom parameter
+        - Requires numerical MLE for parameter estimation
+        - **Preferred for equity returns** where excess kurtosis is
+          present (notebooks confirm ν ∈ [3.6, 7.6] for Swedish equities)
+
+        **Where the VaR-ES gap comes from:** Under Normal distribution,
+        ES/VaR ≈ 1.15 at 99%. Under Student-t with ν=4, ES/VaR ≈ 1.35.
+        The gap grows as tails get fatter — a critical regulatory
+        consideration.
+        """)
+
+    with method_tabs[2]:
+        st.subheader("Monte Carlo Simulation")
+        st.markdown("""
+        **How it works:**
+        1. Simulate N random return paths from an assumed distribution
+           (typically Geometric Brownian Motion)
+        2. Sort simulated terminal returns
+        3. VaR = percentile of simulated distribution
+        4. ES = average of tail outcomes
+
+        **Implementation detail:** This dashboard uses **antithetic
+        variates** for variance reduction — each random draw is paired
+        with its negative mirror, reducing Monte Carlo error by ~50%
+        at no extra computational cost.
+
+        **Pros:** Most flexible. Can incorporate complex dependencies,
+        non-linear instruments, and multi-horizon paths.
+
+        **Cons:** Computationally expensive. Results depend on the
+        assumed stochastic process. Simulation noise means estimates
+        vary between runs.
+        """)
+
+    st.divider()
+
+    # ES coherence explainer
+    st.subheader("Why ES Replaced VaR in FRTB")
+    with st.expander("ES Coherence — The Mathematical Argument"):
+        st.markdown("""
+        A **coherent risk measure** (Artzner et al., 1999) must satisfy
+        four axioms:
+
+        1. **Monotonicity:** If portfolio A always outperforms B,
+           A has lower risk
+        2. **Sub-additivity:** Risk(A + B) ≤ Risk(A) + Risk(B) —
+           diversification should not increase risk
+        3. **Positive homogeneity:** Doubling position size doubles risk
+        4. **Translation invariance:** Adding cash reduces risk by
+           that amount
+
+        **VaR violates sub-additivity.** Two positions can have a
+        combined VaR that exceeds the sum of their individual VaRs —
+        penalizing diversification. This is especially problematic for
+        portfolios with non-linear instruments or concentrated tail risk.
+
+        **ES satisfies all four axioms.** It is always sub-additive,
+        making it the **Basel III / FRTB standard** for market risk
+        capital calculation.
+
+        **Empirical evidence from notebooks:** The equally-weighted
+        portfolio of 5 Swedish equities shows VaR sub-additivity
+        violations of 4.6–7.8%, while ES shows no violation —
+        confirming why regulators moved to ES.
+        """)
+
+    st.divider()
+
+    # Method selection guide
+    st.subheader("Method Selection Guide")
+    guide_data = pd.DataFrame({
+        "Criterion": ["Accuracy (fat tails)", "Computation speed",
+                       "Regulatory acceptance", "Forward-looking",
+                       "Requires distribution assumption"],
+        "Historical": ["★★★★★", "★★★★★", "★★★★☆", "✗", "✗"],
+        "Parametric-t": ["★★★★☆", "★★★★★", "★★★★☆", "✗", "✓"],
+        "Parametric-Normal": ["★★☆☆☆", "★★★★★", "★★☆☆☆", "✗", "✓"],
+        "Monte Carlo": ["★★★☆☆", "★★☆☆☆", "★★★☆☆", "✓", "✓"],
+    })
+    st.dataframe(guide_data, use_container_width=True, hide_index=True)
 
 # ── Tab 6: Backtesting ──────────────────────────────────────────────────────
 
@@ -755,6 +874,71 @@ with tab_backtest:
         title="Rolling Backtest", xaxis_title="Day", yaxis_title="Return"
     )
     st.plotly_chart(fig, use_container_width=True)
+
+    # Test interpretation cards
+    st.subheader("Test Interpretation")
+    with st.expander("What These Tests Actually Mean"):
+        st.markdown(f"""
+        **Kupiec POF Test** (p = {k_test.p_value:.4f}):
+        Tests whether the number of VaR breaches matches expectation.
+        - H₀: breach rate = expected rate ({1-alpha:.1%})
+        - p > 0.05 → **pass** — breaches are at acceptable frequency
+        - p < 0.05 → **fail** — model is miscalibrated
+        - Result: **{'PASS ✓' if not k_test.reject else 'FAIL ✗'}**
+
+        **Christoffersen Test** (p = {c_test.p_value:.4f}):
+        Tests whether breaches are independent (not clustered).
+        - H₀: breaches are independent over time
+        - p > 0.05 → **pass** — breaches are randomly scattered
+        - p < 0.05 → **fail** — breaches cluster, model slow to adapt
+        - Result: **{'PASS ✓' if not c_test.reject else 'FAIL ✗'}**
+
+        **Acerbi-Szekely Z2 Test** (p = {z2_test.p_value:.4f}):
+        Tests whether ES forecasts are well-specified.
+        - H₀: ES forecasts correctly capture tail severity
+        - p > 0.05 → **pass** — ES estimates are adequate
+        - p < 0.05 → **fail** — ES is miscalibrated
+        - Result: **{'PASS ✓' if not z2_test.reject else 'FAIL ✗'}**
+        """)
+
+    # FRTB dual-condition breach map
+    st.subheader("FRTB Dual-Condition Breach Map")
+    breach_fig = _plot_breach_timeline(ret_arr, breaches, breaches_975)
+    st.plotly_chart(breach_fig, use_container_width=True)
+
+    st.caption(
+        "FRTB (2019) requires backtesting at both 99% and 97.5% "
+        "confidence: green zone if ≤12 breaches at 99% AND ≤30 at "
+        "97.5% over 250 days. Red crosses = 99% breaches. Orange "
+        "triangles = 97.5% breaches only."
+    )
+
+    # Traffic light summary with regulatory context
+    st.subheader("Regulatory Capital Multiplier")
+    reg_col1, reg_col2 = st.columns(2)
+    with reg_col1:
+        st.metric(
+            "Basel 1996",
+            f"{color[tl_basel['zone']]} {tl_basel['zone'].upper()}",
+            delta=f"Multiplier: {tl_basel['multiplier']}x"
+        )
+        st.caption(
+            "Basel I market risk amendment. Green zone: k=3.0 (minimum). "
+            "Yellow zone: k=3.4–3.85 (capital add-on 13–28%). "
+            "Red zone: k=4.0 (maximum penalty)."
+        )
+    with reg_col2:
+        st.metric(
+            "FRTB 2019",
+            f"{color[tl_frtb['zone']]} {tl_frtb['zone'].upper()}",
+            delta=f"99%: {breaches.sum()} | 97.5%: {breaches_975.sum()}"
+        )
+        st.caption(
+            "FRTB dual-condition test. Green zone requires BOTH: "
+            "≤12 breaches at 99% AND ≤30 breaches at 97.5% (over 250 days). "
+            "More stringent than Basel 1996 — single condition failure "
+            "triggers red zone."
+        )
 
 # ── Tab 7: Stress Tests ──────────────────────────────────────────────────────
 
