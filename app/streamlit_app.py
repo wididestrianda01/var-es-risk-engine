@@ -16,6 +16,8 @@ from src.backtest import (acerbi_szekely_z2, christoffersen_test, kupiec_test,
 from src.garch import fit_garch
 from src.stress_test import find_worst_window, run_historical_scenario
 from src.utils import compute_returns, fetch_prices
+from scipy import stats as sp_stats
+
 from src.var_methods import compute_var_es
 
 # ── Constants: Swedish equity universe (aligned with notebooks) ──────────
@@ -57,14 +59,10 @@ with st.sidebar:
 
     st.divider()
 
-    # Contextual controls based on selected tab
-    st.caption("**Tab-specific controls**")
-    tab_context = st.radio(
-        "Navigate to tab section",
-        ["Executive Summary", "Risk Snapshot", "Method Comparison",
-         "Model Deep-Dive", "Methodology", "Backtesting", "Stress Tests"],
-        key="sidebar_tab_context",
-        label_visibility="collapsed"
+    st.caption(
+        "**Tip:** Use the tabs above to navigate between analysis views. "
+        "Each tab builds on the previous — start with Executive Summary "
+        "for the full pipeline overview."
     )
 
 
@@ -75,11 +73,30 @@ def load_data(ticker, start, end):
     return prices, returns
 
 
+# ── Helper Functions ────────────────────────────────────────────────────────
+
+
+def _volatility_persistence(params):
+    """Compute GARCH volatility persistence and half-life from parameters.
+
+    Persistence = sum of all ARCH (alpha) and GARCH (beta) coefficients.
+    Half-life = ln(0.5) / ln(persistence) trading days for mean-reversion.
+    """
+    alpha_keys = [k for k in params if "alpha" in k]
+    beta_keys = [k for k in params if "beta" in k]
+    persistence = sum(abs(params[k]) for k in alpha_keys + beta_keys)
+    half_life = (
+        np.log(0.5) / np.log(max(persistence, 0.001))
+        if 0 < persistence < 1
+        else float("inf")
+    )
+    return persistence, half_life
+
+
 # ── Plot Helper Functions ──────────────────────────────────────────────────
 
 def _plot_distribution_overlay(returns, result, alpha):
     """Normal PDF vs Student-t PDF vs empirical histogram with VaR line."""
-    from scipy import stats as sp_stats
     fig = go.Figure()
     fig.add_trace(go.Histogram(
         x=returns, nbinsx=60, histnorm="probability density",
@@ -131,7 +148,6 @@ def _plot_conditional_vol(garch_result, ticker_name):
 
 def _plot_qq_residuals(std_residuals, dist_name, ticker_name):
     """QQ plot of standardized residuals against theoretical distribution."""
-    from scipy import stats as sp_stats
     fig = go.Figure()
     n = len(std_residuals)
     theoretical = sp_stats.norm.ppf((np.arange(1, n + 1) - 0.5) / n)
@@ -238,7 +254,8 @@ try:
     for a in ALPHAS:
         g = garch_result if method != "historical" else None
         alpha_results[a] = compute_var_es(
-            returns, method=method, alpha=a, garch_result=g
+            returns, method=method, alpha=a, horizon=horizon,
+            garch_result=g
         )
 
     data_ok = True
@@ -288,10 +305,10 @@ with tab_exec:
     # Spotlight metrics
     col1, col2, col3 = st.columns(3)
     col1.metric(
-        "Best GARCH Model",
+        "GARCH Model",
         f"{garch_result.vol}({garch_result.p},{garch_result.q})-{garch_result.dist}" if use_garch and garch_result else "N/A",
         delta=f"AICc: {garch_result.aicc:.1f}" if use_garch and garch_result else None,
-        help="AICc-optimal volatility specification selected via grid search across 16 model combinations"
+        help="GARCH(1,1) volatility model. See Model Deep-Dive tab for grid search across 16 specifications."
     )
     col2.metric(
         "Current VaR (97.5%)", f"{alpha_results[0.975].var:.4%}",
@@ -381,11 +398,7 @@ with tab_snapshot:
             c1.metric("Model", f"{garch_result.vol}({garch_result.p},{garch_result.q})")
             c2.metric("Distribution", garch_result.dist.capitalize())
             c3.metric("AICc", f"{garch_result.aicc:.1f}")
-            # Persistence = alpha1 + beta1 (sum of ARCH + GARCH terms)
-            alpha_keys = [k for k in garch_result.params if 'alpha' in k]
-            beta_keys = [k for k in garch_result.params if 'beta' in k]
-            persistence = sum(abs(garch_result.params[k]) for k in alpha_keys + beta_keys)
-            half_life = np.log(0.5) / np.log(max(persistence, 0.001)) if 0 < persistence < 1 else float('inf')
+            persistence, half_life = _volatility_persistence(garch_result.params)
             c4.metric("Half-Life", f"{half_life:.0f} days" if half_life < 1e6 else "∞")
             st.caption(
                 f"**Interpretation:** Volatility shocks decay by 50% in "
@@ -567,11 +580,7 @@ with tab_model:
             )
             st.dataframe(param_df, use_container_width=True)
 
-        # Persistence and half-life
-        alpha_keys = [k for k in gr.params if 'alpha' in k]
-        beta_keys = [k for k in gr.params if 'beta' in k]
-        persistence = sum(abs(gr.params[k]) for k in alpha_keys + beta_keys)
-        half_life = np.log(0.5) / np.log(max(persistence, 0.001)) if 0 < persistence < 1 else float('inf')
+        persistence, half_life = _volatility_persistence(gr.params)
 
         col1, col2 = st.columns(2)
         col1.metric("Volatility Persistence", f"{persistence:.4f}",
