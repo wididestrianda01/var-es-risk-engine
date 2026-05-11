@@ -36,6 +36,11 @@ st.set_page_config(page_title="VaR & ES Engine", layout="wide")
 st.title("VaR & Expected Shortfall Risk Engine")
 st.caption("FRTB-aligned | Basel III | Multi-asset risk analytics")
 
+# ── Session state init (must precede any st.session_state access) ────────
+
+if "data_source" not in st.session_state:
+    st.session_state.data_source = "default"
+
 # ── Sidebar ──────────────────────────────────────────────────────────────────
 
 with st.sidebar:
@@ -226,12 +231,9 @@ def _compute_defaults():
     }
 
 
-# ── Pre-compute defaults (cached) & session state ─────────────────────────
+# ── Pre-compute defaults (cached) ─────────────────────────────────────────
 
 defaults = _compute_defaults()
-
-if "data_source" not in st.session_state:
-    st.session_state.data_source = "default"
 
 
 # ── Live data loading (only when user triggers analysis) ──────────────────
