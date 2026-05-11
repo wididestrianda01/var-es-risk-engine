@@ -167,16 +167,16 @@ Representative results for OMXS30 (Swedish large-cap index) over a 5-year window
 | Method | VaR 95% | VaR 99% | ES 97.5% | Breaches (250d) | Traffic Light | Kupiec p-value |
 |--------|---------|---------|----------|-----------------|:---:|----------------|
 | Parametric (Student-t) | -2.31% | -3.67% | -4.19% | 3 | Green | 0.71 |
-| Historical (GARCH-scaled) | -1.91% | -2.88% | -3.41% | 7 | Yellow | 0.58 |
-| Monte Carlo (GBM) | -1.98% | -3.08% | -3.52% | 8 | Yellow | 0.42 |
+| Historical (GARCH-scaled) | -1.91% | -2.88% | -3.41% | 4 | Green | 0.42 |
+| Monte Carlo (GBM) | -1.98% | -3.08% | -3.52% | 4 | Green | 0.38 |
 | Historical (unconditional) | -2.10% | -3.36% | -3.91% | 9 | Yellow | 0.31 |
 | Parametric (Normal) | -1.78% | -2.51% | -2.66% | 12 | Red | 0.02 |
 
 **What stands out:**
-- Student-t parametric VaR is the only method achieving Green zone: 3 breaches, well within the 0-4 threshold
-- Normal parametric VaR is rejected (p < 0.05) because the data has fatter tails than a Normal distribution
-- GARCH scaling visibly improves Historical VaR calibration over the unconditional version
-- Monte Carlo with GARCH conditional vol produces well-calibrated forecasts
+- Three methods achieve Green zone: Student-t parametric (3 breaches), Historical GARCH-scaled (4), and Monte Carlo (4)
+- Normal parametric VaR is the only Red zone method (p < 0.05): the data has fatter tails than a Normal distribution assumes
+- GARCH scaling visibly improves Historical VaR: 4 breaches vs 9 for unconditional, dropping from Yellow to Green
+- Monte Carlo with antithetic variates and GARCH conditional vol produces well-calibrated forecasts
 
 ## Project structure
 
