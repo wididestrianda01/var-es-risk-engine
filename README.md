@@ -144,7 +144,7 @@ A direct backtest for Expected Shortfall. Unlike Kupiec and Christoffersen which
 
 $$Z_2 = \frac{1}{n}\sum_{t=1}^{n} \frac{R_t}{\mathrm{ES}_t} \cdot \mathbf{1}_{\{R_t \leq \mathrm{VaR}_t\}} + 1$$
 
-Under the null of correctly specified ES, $\mathbb{E}[Z_2] = 1$: the expected return on a breach day, expressed as a fraction of ES, should equal 1. If $Z_2$ is significantly below 1, ES forecasts are too optimistic (underestimating tail loss). If above 1, ES is too conservative.
+Under the null of correctly specified ES, $\mathbb{E}[Z_2] = (1-\alpha) + 1$ (e.g., 1.01 at 99% confidence): the expected return on a breach day, expressed as a fraction of ES, should equal 1. If $Z_2$ is significantly below its expected value, ES forecasts are too optimistic (underestimating tail loss). If above, ES is too conservative.
 
 P-values are computed by Monte Carlo simulation: breach days are randomly reshuffled under the null, and the distribution of Z2 under no timing skill is compared to the observed value.
 
@@ -162,21 +162,21 @@ Historical scenario replay and sensitivity analysis:
 
 ![Risk Snapshot](img/risk_snapshot.png)
 
-Representative results for OMXS30 (Swedish large-cap index) over a 5-year window, with GARCH(1,1) conditional volatility:
+Rolling backtest on OMXS30 (Swedish large-cap index): 2-year expanding window, 167 monthly-step out-of-sample forecasts, GARCH(1,1) refit per window. Results from `notebooks/04_backtesting.ipynb`:
 
-| Method | VaR 95% | VaR 99% | ES 97.5% | Breaches (250d) | Traffic Light | Kupiec p-value |
+| Method | VaR 95% | VaR 99% | ES 97.5% | Breaches (167d) | Traffic Light | Kupiec p-value |
 |--------|---------|---------|----------|-----------------|:---:|----------------|
-| Parametric (Student-t) | -2.31% | -3.67% | -4.19% | 3 | Green | 0.71 |
-| Historical (GARCH-scaled) | -1.91% | -2.88% | -3.41% | 4 | Green | 0.42 |
-| Monte Carlo (GBM) | -1.98% | -3.08% | -3.52% | 4 | Green | 0.38 |
-| Historical (unconditional) | -2.10% | -3.36% | -3.91% | 9 | Yellow | 0.31 |
-| Parametric (Normal) | -1.78% | -2.51% | -2.66% | 12 | Red | 0.02 |
+| Historical (GARCH-scaled) | -1.66% | -2.80% | -2.92% | 2 | Green | 0.8034 |
+| Historical (unconditional) | -1.84% | -3.12% | -3.25% | 3 | Green | 0.3522 |
+| Parametric (Normal) | -1.67% | -2.38% | -2.39% | 3 | Green | 0.3522 |
+| Parametric (Student-t) | -1.73% | -2.99% | -3.18% | 3 | Green | 0.3522 |
+| Monte Carlo (GBM) | -1.71% | -2.44% | -2.44% | 3 | Green | 0.3522 |
 
 **What stands out:**
-- Three methods achieve Green zone: Student-t parametric (3 breaches), Historical GARCH-scaled (4), and Monte Carlo (4)
-- Normal parametric VaR is the only Red zone method (p < 0.05): the data has fatter tails than a Normal distribution assumes
-- GARCH scaling visibly improves Historical VaR: 4 breaches vs 9 for unconditional, dropping from Yellow to Green
-- Monte Carlo with antithetic variates and GARCH conditional vol produces well-calibrated forecasts
+- All five methods achieve Green zone under Basel II (1996) traffic light: no capital add-on required
+- Historical GARCH-scaled performs best: 2 breaches with p=0.80, matching the expected breach rate almost exactly
+- Parametric methods (Normal and Student-t) produce slightly less conservative VaR at 99% (-2.38% and -2.99%) compared to Historical (-3.12% unconditional)
+- Student-t parametric gives wider ES(97.5%) than Normal (-3.18% vs -2.39%), reflecting the fatter-tailed distribution
 
 ## Project structure
 
