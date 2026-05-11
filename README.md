@@ -214,21 +214,21 @@ Historical scenario replay and sensitivity analysis:
 
 ![Risk Snapshot](img/risk_snapshot.png)
 
-Rolling backtest on OMXS30 (Swedish large-cap index): 2-year expanding window, 167 monthly-step out-of-sample forecasts, GARCH(1,1) refit per window. Results from `notebooks/04_backtesting.ipynb`:
+Rolling backtest on OMXS30 (Swedish large-cap index): 2-year expanding window, 250 biweekly-step out-of-sample forecasts, GARCH(1,1) refit per window. Basel II (1996) traffic light applied at 99% VaR over 250 trading days. Results from `notebooks/04_backtesting.ipynb`:
 
-| Method | VaR 95% | VaR 99% | ES 97.5% | Breaches (167d) | Traffic Light | Kupiec p-value |
+| Method | VaR 95% | VaR 99% | ES 97.5% | Breaches (250d) | Traffic Light | Kupiec p-value |
 |--------|---------|---------|----------|-----------------|:---:|----------------|
-| Historical (GARCH-scaled) | -1.66% | -2.80% | -2.92% | 2 | Green | 0.8034 |
-| Historical (unconditional) | -1.84% | -3.12% | -3.25% | 3 | Green | 0.3522 |
-| Parametric (Normal) | -1.67% | -2.38% | -2.39% | 3 | Green | 0.3522 |
-| Parametric (Student-t) | -1.73% | -2.99% | -3.18% | 3 | Green | 0.3522 |
-| Monte Carlo (GBM) | -1.71% | -2.44% | -2.44% | 3 | Green | 0.3522 |
+| Historical (unconditional) | -1.84% | -3.11% | -3.24% | 4 | Green | 0.3843 |
+| Parametric (Student-t) | -1.73% | -3.00% | -3.19% | 4 | Green | 0.3843 |
+| Historical (GARCH-scaled) | -1.68% | -2.83% | -2.95% | 5 | Yellow | 0.1640 |
+| Monte Carlo (GBM) | -1.73% | -2.46% | -2.46% | 8 | Yellow | 0.0056 |
+| Parametric (Normal) | -1.69% | -2.40% | -2.41% | 9 | Yellow | 0.0014 |
 
 **What stands out:**
-- All five methods achieve Green zone under Basel II (1996) traffic light: no capital add-on required
-- Historical GARCH-scaled performs best: 2 breaches with p=0.80, matching the expected breach rate almost exactly
-- Parametric methods (Normal and Student-t) produce slightly less conservative VaR at 99% (-2.38% and -2.99%) compared to Historical (-3.12% unconditional)
-- Student-t parametric gives wider ES(97.5%) than Normal (-3.18% vs -2.39%), reflecting the fatter-tailed distribution
+- Two methods achieve Green zone: Historical unconditional and Parametric Student-t, both with 4 breaches (p > 0.05)
+- Parametric Normal is rejected (p < 0.01): the Normal distribution cannot capture the fat tails in OMXS30 returns
+- GARCH scaling alone is not enough: Historical GARCH-scaled sits at 5 breaches (Yellow) despite better volatility conditioning
+- Student-t parametric balances the best of both: fat-tailed distribution with GARCH conditional volatility
 
 ## Project structure
 
