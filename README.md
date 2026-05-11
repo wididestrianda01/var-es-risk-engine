@@ -111,7 +111,7 @@ Three methods behind a single `compute_var_es()` interface:
 **Historical simulation**
 
 $$
-\mathrm{VaR}_\alpha = \operatorname{Percentile}\bigl(\{ r_t \}_{t=1}^T,\; 1-\alpha\bigr)
+\mathrm{VaR}_\alpha = \mathrm{Percentile}\bigl(\{ r_t \}_{t=1}^T,\; 1-\alpha\bigr)
 $$
 
 
