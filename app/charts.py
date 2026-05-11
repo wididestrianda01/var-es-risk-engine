@@ -223,3 +223,58 @@ def plot_scenario_waterfall(
         yaxis_title="|VaR| (Daily Loss)",
     )
     return fig
+
+def plot_news_impact_curve(
+    garch_result: GarchResult,
+) -> go.Figure:
+    """News impact curve showing asymmetric volatility response to shocks.
+
+    EGARCH: negative shocks increase future volatility more than positive
+    shocks of equal magnitude (leverage effect). GARCH: symmetric parabola.
+
+    The curve plots the volatility response as a function of the previous
+    standardized shock (epsilon_{t-1}), with all other terms held constant.
+    """
+    params = garch_result.params
+    omega = params.get("omega", 0.0)
+    alpha = params.get("alpha[1]", 0.1)
+    gamma = params.get("gamma[1]", 0.0)
+
+    eps = np.linspace(-4, 4, 200)
+
+    if garch_result.vol == "EGARCH":
+        # EGARCH: log(sigma^2_t) = ... + alpha * (|eps| + gamma*eps)
+        impacts = omega + alpha * np.abs(eps) + gamma * eps
+    else:
+        # GARCH: sigma^2_t = ... + alpha * eps^2
+        impacts = omega + alpha * eps ** 2
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=eps,
+            y=impacts,
+            mode="lines",
+            name=f"{garch_result.vol} News Impact",
+            line=dict(
+                color="darkred" if garch_result.vol == "EGARCH" else "steelblue",
+                width=2,
+            ),
+        )
+    )
+    fig.add_vline(x=0, line_dash="dot", line_color="gray")
+
+    y_label = (
+        "Impact on log(σ²ₜ)"
+        if garch_result.vol == "EGARCH"
+        else "Impact on σ²ₜ"
+    )
+    fig.update_layout(
+        title=(
+            f"News Impact Curve — {garch_result.vol}"
+            f"({garch_result.p},{garch_result.q})-{garch_result.dist}"
+        ),
+        xaxis_title="Standardized Shock (εₜ₋₁)",
+        yaxis_title=y_label,
+    )
+    return fig

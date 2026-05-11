@@ -19,8 +19,8 @@ from src.utils import compute_returns, fetch_prices
 from src.var_methods import compute_var_es
 
 from app.charts import (plot_breach_timeline, plot_conditional_vol,
-                        plot_distribution_overlay, plot_qq_residuals,
-                        plot_scenario_waterfall)
+                        plot_distribution_overlay, plot_news_impact_curve,
+                        plot_qq_residuals, plot_scenario_waterfall)
 
 # ── Constants: Swedish equity universe (aligned with notebooks) ──────────
 
@@ -94,6 +94,123 @@ def _volatility_persistence(params):
     )
     return persistence, half_life
 
+@st.cache_data(ttl=3600)
+def _compute_defaults():
+    """Pre-compute OMXS30 2010-2025 results for fallback display.
+
+    Runs GARCH grid search, rolling backtest (500-day window, historical
+    method at 99% VaR), and stress scenarios once per hour. Returns a
+    dict with keys: garch_grid, garch_single, backtest, stress_scenarios,
+    returns.
+    """
+    default_ticker = "^OMX"
+    default_start = "2010-01-01"
+    default_end = "2025-12-31"
+
+    prices = fetch_prices(default_ticker, default_start, default_end)
+    returns = compute_returns(prices, method="log")
+
+    # GARCH: grid search for best model + single fit for cond vol
+    garch_grid = fit_garch_grid(returns)
+    garch_single = fit_garch(returns)
+
+    # Rolling backtest: 500-day window, historical method, 99% VaR
+    est_window = 500
+    var_fc, es_fc, real = [], [], []
+    var_fc_975 = []
+    prev_garch = None
+    for t in range(est_window, len(returns)):
+        train = returns[t - est_window : t]
+        try:
+            g = fit_garch(train)
+            prev_garch = g
+        except Exception:
+            g = prev_garch  # reuse previous successful fit
+        try:
+            r = compute_var_es(
+                train, method="historical", alpha=0.99, garch_result=g
+            )
+            var_fc.append(r.var)
+            es_fc.append(r.es)
+            real.append(returns[t])
+            r_975 = compute_var_es(
+                train, method="historical", alpha=0.975, garch_result=g
+            )
+            var_fc_975.append(r_975.var)
+        except Exception:
+            continue
+
+    var_arr = np.array(var_fc)
+    es_arr = np.array(es_fc)
+    ret_arr = np.array(real)
+    var_975_arr = np.array(var_fc_975)
+    breaches = (ret_arr <= var_arr).astype(int)
+    breaches_975 = (ret_arr <= var_975_arr).astype(int)
+
+    # Stress scenarios
+    ret_series = pd.Series(
+        returns,
+        index=pd.date_range(
+            start=pd.Timestamp(default_start),
+            periods=len(returns),
+            freq="B",
+        ),
+    )
+    scenarios = {}
+    for label, s, e in [
+        ("COVID 2020", "2020-02-19", "2020-03-23"),
+        ("2008 GFC", "2008-09-01", "2008-12-31"),
+    ]:
+        try:
+            scenarios[label] = run_historical_scenario(
+                ret_series, s, e, label
+            )
+        except (ValueError, KeyError):
+            pass
+    try:
+        worst_start, worst_end = find_worst_window(ret_series)
+        scenarios["Worst 12-Month"] = run_historical_scenario(
+            ret_series,
+            str(worst_start.date()),
+            str(worst_end.date()),
+            "Worst Auto-Detected",
+        )
+    except (ValueError, KeyError):
+        pass
+
+    backtest = {
+        "breaches_sum": int(breaches.sum()),
+        "breaches_total": len(breaches),
+        "breaches_975_sum": int(breaches_975.sum()),
+        "kupiec": kupiec_test(breaches.sum(), len(breaches), 0.99),
+        "christoffersen": christoffersen_test(breaches),
+        "acerbi_szekely": acerbi_szekely_z2(
+            ret_arr, var_arr, es_arr, 0.99, n_sim=500
+        ),
+        "traffic_basel": traffic_light(
+            breaches.sum(), len(breaches), framework="basel1996"
+        ),
+        "traffic_frtb": traffic_light(
+            breaches_99=breaches.sum(),
+            breaches_975=breaches_975.sum(),
+            total=len(breaches),
+            framework="frtb2019",
+        ),
+        "ret_arr": ret_arr,
+        "var_arr": var_arr,
+        "es_arr": es_arr,
+        "breaches_arr": breaches,
+        "breaches_975_arr": breaches_975,
+    }
+
+    return {
+        "garch_grid": garch_grid,
+        "garch_single": garch_single,
+        "backtest": backtest,
+        "stress_scenarios": scenarios,
+        "returns": returns,
+    }
+
 
 try:
     prices, returns = load_data(ticker, *date_range)
@@ -132,6 +249,9 @@ except Exception as exc:
 if not data_ok:
     st.stop()
 
+# Pre-compute defaults for fallback display (OMXS30, 2010-2025)
+defaults = _compute_defaults()
+
 # ── Tabs ─────────────────────────────────────────────────────────────────────
 
 ( tab_exec, tab_snapshot, tab_compare, tab_model,
@@ -164,12 +284,19 @@ with tab_exec:
 
     # Spotlight metrics
     col1, col2, col3 = st.columns(3)
-    col1.metric(
-        "GARCH Model",
-        f"{garch_result.vol}({garch_result.p},{garch_result.q})-{garch_result.dist}" if use_garch and garch_result else "N/A",
-        delta=f"AICc: {garch_result.aicc:.1f}" if use_garch and garch_result else None,
-        help="GARCH(1,1) volatility model. See Model Deep-Dive tab for grid search across 16 specifications."
-    )
+    if use_garch and garch_result:
+        col1.metric(
+            "GARCH Model",
+            f"{garch_result.vol}({garch_result.p},{garch_result.q})-{garch_result.dist}",
+            delta=f"AICc: {garch_result.aicc:.1f}",
+            help="GARCH(1,1) volatility model. See Model Deep-Dive tab for grid search across 16 specifications."
+        )
+    else:
+        col1.metric(
+            "GARCH Model",
+            "N/A",
+            help="Enable 'Use GARCH volatility' in sidebar to fit a model."
+        )
     col2.metric(
         "Current VaR (97.5%)", f"{alpha_results[0.975].var:.4%}",
         delta=f"Method: {method.capitalize()}",
@@ -407,10 +534,20 @@ with tab_model:
 
     if not use_garch:
         st.info("Enable 'Use GARCH volatility' in the sidebar to see model diagnostics.")
-    elif garch_grid_result is None:
-        st.warning("GARCH grid search did not converge for this asset. Try a different ticker or date range.")
     else:
+        # Determine data source: live or default
         gr = garch_grid_result
+        using_default = False
+        if gr is None:
+            gr = defaults["garch_grid"]
+            using_default = True
+
+        if using_default:
+            st.info(
+                "**Showing default view (OMXS30, 2010–2025).** "
+                "Grid search did not converge for current selection. "
+                "Try a wider date range or different asset."
+            )
 
         st.subheader("Model Selection: Grid Search Results")
 
@@ -427,7 +564,6 @@ with tab_model:
             includes a finite-sample correction.
             """)
 
-        # Grid search result summary
         st.markdown(f"""
         **Selected Model:** **{gr.vol}({gr.p},{gr.q})-{gr.dist}**
         | AICc: {gr.aicc:.1f} | AIC: {gr.aic:.1f} | BIC: {gr.bic:.1f}
@@ -443,10 +579,15 @@ with tab_model:
         persistence, half_life = _volatility_persistence(gr.params)
 
         col1, col2 = st.columns(2)
-        col1.metric("Volatility Persistence", f"{persistence:.4f}",
-                     delta="Stationary" if persistence < 1 else "Non-stationary")
-        col2.metric("Half-Life", f"{half_life:.0f} trading days" if half_life < 1e6 else "∞",
-                     delta=f"~{half_life/252:.1f} years" if half_life < 1e6 else None)
+        col1.metric(
+            "Volatility Persistence", f"{persistence:.4f}",
+            delta="Stationary" if persistence < 1 else "Non-stationary"
+        )
+        col2.metric(
+            "Half-Life",
+            f"{half_life:.0f} trading days" if half_life < 1e6 else "∞",
+            delta=f"~{half_life/252:.1f} years" if half_life < 1e6 else None
+        )
 
         # Conditional volatility plot
         st.subheader("Conditional Volatility")
@@ -456,7 +597,10 @@ with tab_model:
             "market stress events."
         )
         try:
-            vol_fig = plot_conditional_vol(gr, NAME_MAP[ticker], date_range)
+            display_name = NAME_MAP[ticker] if not using_default else "OMXS30 (default)"
+            display_date_range = date_range if not using_default else (
+                pd.Timestamp("2010-01-01"), pd.Timestamp("2025-12-31"))
+            vol_fig = plot_conditional_vol(gr, display_name, display_date_range)
             st.plotly_chart(vol_fig, use_container_width=True)
         except Exception as e:
             st.warning(f"Could not render conditional volatility plot: {e}")
@@ -464,15 +608,20 @@ with tab_model:
         # Standardized residuals
         st.subheader("Model Diagnostics: Standardized Residuals")
         if hasattr(gr, 'cond_vol') and len(gr.cond_vol) > 1:
-            std_resid = returns[-len(gr.cond_vol):] / np.maximum(gr.cond_vol, 1e-10)
+            # Get returns matching the cond_vol length for defaults
+            resid_returns = (
+                returns[-len(gr.cond_vol):] if not using_default
+                else defaults["returns"][-len(gr.cond_vol):]
+            )
+            std_resid = resid_returns / np.maximum(gr.cond_vol, 1e-10)
 
             col1, col2 = st.columns(2)
             with col1:
-                qq_fig = plot_qq_residuals(std_resid, gr.dist, NAME_MAP[ticker])
+                resid_display_name = display_name if not using_default else "OMXS30"
+                qq_fig = plot_qq_residuals(std_resid, gr.dist, resid_display_name)
                 st.plotly_chart(qq_fig, use_container_width=True)
 
             with col2:
-                # ACF of squared standardized residuals
                 from statsmodels.tsa.stattools import acf
                 sq_resid = std_resid ** 2
                 acf_vals = acf(sq_resid, nlags=20)
@@ -503,7 +652,34 @@ with tab_model:
                 "no significant autocorrelation (bars within the 95% CI)."
             )
 
-        # EGARCH leverage explainer (if applicable)
+        # News impact curve (new)
+        st.subheader("News Impact Curve")
+        with st.expander("What is the News Impact Curve?"):
+            st.markdown("""
+            The **news impact curve** (Engle & Ng, 1993) shows how
+            yesterday's return shock (ε_{t-1}) affects today's
+            volatility forecast (σ²_t).
+
+            **For GARCH:** The curve is symmetric — positive and negative
+            shocks of equal size produce identical volatility increases.
+            This assumes no leverage effect.
+
+            **For EGARCH:** The curve is asymmetric — negative shocks
+            (market declines) produce larger volatility increases than
+            positive shocks (market gains) of the same magnitude.
+            This is the **leverage effect**: bad news increases future
+            volatility more than good news.
+
+            **γ < 0** → negative shocks amplify volatility more.
+            This is the canonical pattern for equity markets.
+            """)
+        try:
+            nic_fig = plot_news_impact_curve(gr)
+            st.plotly_chart(nic_fig, use_container_width=True)
+        except Exception as e:
+            st.warning(f"Could not render news impact curve: {e}")
+
+        # EGARCH leverage explainer
         if gr.vol == "EGARCH":
             st.subheader("Leverage Effect (EGARCH)")
             gamma_keys = [k for k in gr.params if 'gamma' in k]
@@ -669,54 +845,101 @@ with tab_backtest:
     st.header("Backtesting")
 
     est_window = 500
+    using_default = False
+    loop_failed = False
+
+    # Decide data source
     if len(returns) < est_window:
-        st.warning(
-            f"Need at least {est_window} observations for backtesting "
-            f"(have {len(returns)}). Select a wider date range."
+        using_default = True
+    else:
+        # Attempt live rolling backtest
+        var_fc, es_fc, real = [], [], []
+        var_fc_975 = []
+        prev_garch = None
+        for t in range(est_window, len(returns)):
+            train = returns[t - est_window : t]
+            try:
+                g = fit_garch(train) if use_garch else None
+                prev_garch = g
+            except Exception:
+                g = prev_garch
+                loop_failed = True
+            try:
+                r = compute_var_es(
+                    train, method=method, alpha=alpha, garch_result=g
+                )
+                var_fc.append(r.var)
+                es_fc.append(r.es)
+                real.append(returns[t])
+                r_975 = compute_var_es(
+                    train, method=method, alpha=0.975, garch_result=g
+                )
+                var_fc_975.append(r_975.var)
+            except Exception:
+                loop_failed = True
+                continue
+
+        if len(var_fc) == 0:
+            using_default = True
+
+    if using_default:
+        bt = defaults["backtest"]
+        st.info(
+            "**Showing default view (OMXS30, 2010\u20132025).** "
+            "Need at least 500 observations for backtesting. "
+            "Select a wider date range for live analysis."
         )
-        st.stop()
+        var_arr = bt["var_arr"]
+        es_arr = bt["es_arr"]
+        ret_arr = bt["ret_arr"]
+        var_975_arr = bt["breaches_975_arr"]
+        breaches = bt["breaches_arr"]
+        breaches_975 = bt["breaches_975_arr"]
+        k_test = bt["kupiec"]
+        c_test = bt["christoffersen"]
+        z2_test = bt["acerbi_szekely"]
+        tl_basel = bt["traffic_basel"]
+        tl_frtb = bt["traffic_frtb"]
+    else:
+        var_arr = np.array(var_fc)
+        es_arr = np.array(es_fc)
+        ret_arr = np.array(real)
+        var_975_arr = np.array(var_fc_975)
+        breaches = (ret_arr <= var_arr).astype(int)
+        breaches_975 = (ret_arr <= var_975_arr).astype(int)
 
-    var_fc, es_fc, real = [], [], []
-    var_fc_975 = []
+        k_test = kupiec_test(breaches.sum(), len(breaches), alpha)
+        c_test = christoffersen_test(breaches)
+        z2_test = acerbi_szekely_z2(
+            ret_arr, var_arr, es_arr, alpha, n_sim=500
+        )
+        tl_basel = traffic_light(
+            breaches.sum(), len(breaches), framework="basel1996"
+        )
+        tl_frtb = traffic_light(
+            breaches_99=breaches.sum(),
+            breaches_975=breaches_975.sum(),
+            total=len(breaches),
+            framework="frtb2019",
+        )
 
-    for t in range(est_window, len(returns)):
-        train = returns[t - est_window : t]
-        g = fit_garch(train) if use_garch else None
-        r = compute_var_es(train, method=method, alpha=alpha, garch_result=g)
-        var_fc.append(r.var)
-        es_fc.append(r.es)
-        real.append(returns[t])
-        # FRTB: also track 97.5% VaR breaches
-        r_975 = compute_var_es(train, method=method, alpha=0.975, garch_result=g)
-        var_fc_975.append(r_975.var)
+        if loop_failed:
+            st.warning(
+                "Some GARCH fits in the rolling loop failed to converge. "
+                "Results may use fallback estimates for those windows."
+            )
 
-    var_arr = np.array(var_fc)
-    es_arr = np.array(es_fc)
-    ret_arr = np.array(real)
-    var_975_arr = np.array(var_fc_975)
-    breaches = (ret_arr <= var_arr).astype(int)
-    breaches_975 = (ret_arr <= var_975_arr).astype(int)
-
-    k_test = kupiec_test(breaches.sum(), len(breaches), alpha)
-    c_test = christoffersen_test(breaches)
-    z2_test = acerbi_szekely_z2(ret_arr, var_arr, es_arr, alpha, n_sim=500)
-    tl_basel = traffic_light(breaches.sum(), len(breaches), framework="basel1996")
-    tl_frtb = traffic_light(
-        breaches_99=breaches.sum(),
-        breaches_975=breaches_975.sum(),
-        total=len(breaches),
-        framework="frtb2019",
-    )
-
+    # Metrics row
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Breaches", f"{breaches.sum()}/{len(breaches)}")
     col2.metric("Kupiec p-value", f"{k_test.p_value:.4f}")
     col3.metric("Christoffersen p-value", f"{c_test.p_value:.4f}")
     col4.metric("Acerbi-Szekely Z2", f"{z2_test.p_value:.4f}")
 
+    # Traffic light
     st.subheader("Traffic Light")
     c1, c2 = st.columns(2)
-    color = {"green": "🟢", "yellow": "🟡", "red": "🔴"}
+    color = {"green": "\U0001f7e2", "yellow": "\U0001f7e1", "red": "\U0001f534"}
     c1.metric(
         "Basel 1996",
         f"{color[tl_basel['zone']]} {tl_basel['zone']}",
@@ -728,6 +951,7 @@ with tab_backtest:
         delta=f"99%: {breaches.sum()}  |  97.5%: {breaches_975.sum()}",
     )
 
+    # Rolling backtest chart
     fig = go.Figure()
     fig.add_trace(
         go.Scatter(
@@ -756,30 +980,30 @@ with tab_backtest:
     )
     st.plotly_chart(fig, use_container_width=True)
 
-    # Test interpretation cards
+    # Test interpretation
     st.subheader("Test Interpretation")
     with st.expander("What These Tests Actually Mean"):
         st.markdown(f"""
         **Kupiec POF Test** (p = {k_test.p_value:.4f}):
         Tests whether the number of VaR breaches matches expectation.
-        - H₀: breach rate = expected rate ({1-alpha:.1%})
-        - p > 0.05 → **pass** — breaches are at acceptable frequency
-        - p < 0.05 → **fail** — model is miscalibrated
-        - Result: **{'PASS ✓' if not k_test.reject else 'FAIL ✗'}**
+        - H\u2080: breach rate = expected rate ({1-alpha:.1%})
+        - p > 0.05 \u2192 **pass** \u2014 breaches are at acceptable frequency
+        - p < 0.05 \u2192 **fail** \u2014 model is miscalibrated
+        - Result: **{'PASS \u2713' if not k_test.reject else 'FAIL \u2717'}**
 
         **Christoffersen Test** (p = {c_test.p_value:.4f}):
         Tests whether breaches are independent (not clustered).
-        - H₀: breaches are independent over time
-        - p > 0.05 → **pass** — breaches are randomly scattered
-        - p < 0.05 → **fail** — breaches cluster, model slow to adapt
-        - Result: **{'PASS ✓' if not c_test.reject else 'FAIL ✗'}**
+        - H\u2080: breaches are independent over time
+        - p > 0.05 \u2192 **pass** \u2014 breaches are randomly scattered
+        - p < 0.05 \u2192 **fail** \u2014 breaches cluster, model slow to adapt
+        - Result: **{'PASS \u2713' if not c_test.reject else 'FAIL \u2717'}**
 
         **Acerbi-Szekely Z2 Test** (p = {z2_test.p_value:.4f}):
         Tests whether ES forecasts are well-specified.
-        - H₀: ES forecasts correctly capture tail severity
-        - p > 0.05 → **pass** — ES estimates are adequate
-        - p < 0.05 → **fail** — ES is miscalibrated
-        - Result: **{'PASS ✓' if not z2_test.reject else 'FAIL ✗'}**
+        - H\u2080: ES forecasts correctly capture tail severity
+        - p > 0.05 \u2192 **pass** \u2014 ES estimates are adequate
+        - p < 0.05 \u2192 **fail** \u2014 ES is miscalibrated
+        - Result: **{'PASS \u2713' if not z2_test.reject else 'FAIL \u2717'}**
         """)
 
     # FRTB dual-condition breach map
@@ -789,12 +1013,12 @@ with tab_backtest:
 
     st.caption(
         "FRTB (2019) requires backtesting at both 99% and 97.5% "
-        "confidence: green zone if ≤12 breaches at 99% AND ≤30 at "
+        "confidence: green zone if \u226412 breaches at 99% AND \u226430 at "
         "97.5% over 250 days. Red crosses = 99% breaches. Orange "
         "triangles = 97.5% breaches only."
     )
 
-    # Traffic light summary with regulatory context
+    # Traffic light summary
     st.subheader("Regulatory Capital Multiplier")
     reg_col1, reg_col2 = st.columns(2)
     with reg_col1:
@@ -805,7 +1029,7 @@ with tab_backtest:
         )
         st.caption(
             "Basel I market risk amendment. Green zone: k=3.0 (minimum). "
-            "Yellow zone: k=3.4–3.85 (capital add-on 13–28%). "
+            "Yellow zone: k=3.4\u20133.85 (capital add-on 13\u201328%). "
             "Red zone: k=4.0 (maximum penalty)."
         )
     with reg_col2:
@@ -816,8 +1040,8 @@ with tab_backtest:
         )
         st.caption(
             "FRTB dual-condition test. Green zone requires BOTH: "
-            "≤12 breaches at 99% AND ≤30 breaches at 97.5% (over 250 days). "
-            "More stringent than Basel 1996 — single condition failure "
+            "\u226412 breaches at 99% AND \u226430 breaches at 97.5% (over 250 days). "
+            "More stringent than Basel 1996 \u2014 single condition failure "
             "triggers red zone."
         )
 
@@ -825,6 +1049,8 @@ with tab_backtest:
 
 with tab_stress:
     st.header("Stress Tests")
+
+    using_default = False
 
     ret_series = pd.Series(
         returns,
@@ -856,93 +1082,101 @@ with tab_stress:
     except (ValueError, KeyError):
         pass
 
-    if scenarios:
-        df_scenarios = pd.DataFrame(
-            [
-                {
-                    "Scenario": s,
-                    "VaR": f"{r.var:.4%}",
-                    "ES": f"{r.es:.4%}",
-                    "Cumulative P&L": f"{r.pnl:.4%}",
-                    "Worst Day": f"{r.worst_day:.4%}",
-                }
-                for s, r in scenarios.items()
-            ]
-        )
-        st.dataframe(df_scenarios, use_container_width=True)
+    if not scenarios:
+        scenarios = defaults["stress_scenarios"]
+        using_default = True
 
-        fig = go.Figure()
-        for s, r in scenarios.items():
-            fig.add_trace(
-                go.Bar(name=s, x=["VaR", "ES"], y=[abs(r.var), abs(r.es)])
-            )
-        fig.update_layout(
-            title="Stress Scenario Comparison",
-            yaxis_title="Loss Magnitude",
-            barmode="group",
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-        st.divider()
-
-        # Scenario waterfall chart
-        st.subheader("Stress Escalation Waterfall")
-        try:
-            baseline_va = abs(alpha_results[0.975].var)
-            waterfall_fig = plot_scenario_waterfall(scenarios, baseline_va)
-            st.plotly_chart(waterfall_fig, use_container_width=True)
-        except Exception as e:
-            st.warning(f"Could not render waterfall chart: {e}")
-
-        st.caption(
-            "The waterfall shows how VaR magnitude escalates from baseline "
-            "(full-sample) → crisis scenarios → worst historical window. "
-            "Each step represents the additional risk revealed by stress "
-            "testing beyond normal-market VaR."
+    if using_default:
+        st.info(
+            "**Showing default view (OMXS30, 2010–2025).** "
+            "No stress scenarios overlap the selected date range. "
+            "Select a range covering 2008–2020 for live analysis."
         )
 
-        # Regulatory capital implication
-        st.subheader("Regulatory Context")
-        with st.expander("How Stress Tests Feed Into Capital Requirements"):
-            st.markdown("""
-            **Basel III / FRTB Framework:**
-
-            1. **VaR-based capital** (day-to-day): Uses the VaR model
-               calibrated to a 1-year window with 97.5% ES
-
-            2. **Stressed VaR / ES** (crisis-period calibration): Computed
-               over a 12-month period of significant financial stress. In
-               this dashboard: the COVID-19 crash (Feb–Mar 2020) or the
-               worst auto-detected window.
-
-            3. **Capital floor:** The higher of:
-               - Current VaR × multiplier (3.0–4.0, from traffic light)
-               - Stressed VaR × multiplier
-               - Standardized Approach (SA-CCR) capital charge
-
-            **Key insight:** Stress testing is not optional — it directly
-            determines regulatory capital. A model that passes backtesting
-            in normal markets but fails under stress produces capital
-            requirements that are 1.5–3x higher.
-            """)
-
-        # Sensitivity analysis summary
-        st.subheader("Scenario Severity Ranking")
-        severity_data = pd.DataFrame([
-            {"Scenario": s, "|VaR|": abs(r.var), "|ES|": abs(r.es),
-             "Cumul. P&L": r.pnl, "Worst Day": r.worst_day}
+    df_scenarios = pd.DataFrame(
+        [
+            {
+                "Scenario": s,
+                "VaR": f"{r.var:.4%}",
+                "ES": f"{r.es:.4%}",
+                "Cumulative P&L": f"{r.pnl:.4%}",
+                "Worst Day": f"{r.worst_day:.4%}",
+            }
             for s, r in scenarios.items()
-        ]).sort_values("|VaR|", ascending=False)
-        st.dataframe(severity_data, use_container_width=True)
+        ]
+    )
+    st.dataframe(df_scenarios, use_container_width=True)
 
-        st.caption(
-            "**Finding (from notebooks):** Crisis-period VaR is 2–5x "
-            "higher than full-sample VaR. COVID-19 crash produced the "
-            "largest volatility spike in the 2010–2025 sample, with a "
-            "5.3x VaR multiplier. The worst auto-detected window captures "
-            "prolonged drawdowns that single-crash scenarios miss."
+    fig = go.Figure()
+    for s, r in scenarios.items():
+        fig.add_trace(
+            go.Bar(name=s, x=["VaR", "ES"], y=[abs(r.var), abs(r.es)])
         )
-    else:
-        st.warning(
-            "No stress scenarios available for selected date range."
+    fig.update_layout(
+        title="Stress Scenario Comparison",
+        yaxis_title="Loss Magnitude",
+        barmode="group",
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.divider()
+
+    # Waterfall chart
+    st.subheader("Stress Escalation Waterfall")
+    try:
+        baseline_va = abs(alpha_results[0.975].var) if not using_default else abs(
+            np.percentile(defaults["returns"], 2.5)
         )
+        waterfall_fig = plot_scenario_waterfall(scenarios, baseline_va)
+        st.plotly_chart(waterfall_fig, use_container_width=True)
+    except Exception as e:
+        st.warning(f"Could not render waterfall chart: {e}")
+
+    st.caption(
+        "The waterfall shows how VaR magnitude escalates from baseline "
+        "(full-sample) → crisis scenarios → worst historical window. "
+        "Each step represents the additional risk revealed by stress "
+        "testing beyond normal-market VaR."
+    )
+
+    # Regulatory context
+    st.subheader("Regulatory Context")
+    with st.expander("How Stress Tests Feed Into Capital Requirements"):
+        st.markdown("""
+        **Basel III / FRTB Framework:**
+
+        1. **VaR-based capital** (day-to-day): Uses the VaR model
+           calibrated to a 1-year window with 97.5% ES
+
+        2. **Stressed VaR / ES** (crisis-period calibration): Computed
+           over a 12-month period of significant financial stress. In
+           this dashboard: the COVID-19 crash (Feb–Mar 2020) or the
+           worst auto-detected window.
+
+        3. **Capital floor:** The higher of:
+           - Current VaR × multiplier (3.0–4.0, from traffic light)
+           - Stressed VaR × multiplier
+           - Standardized Approach (SA-CCR) capital charge
+
+        **Key insight:** Stress testing is not optional — it directly
+        determines regulatory capital. A model that passes backtesting
+        in normal markets but fails under stress produces capital
+        requirements that are 1.5–3x higher.
+        """)
+
+    # Severity ranking
+    st.subheader("Scenario Severity Ranking")
+    severity_data = pd.DataFrame([
+        {"Scenario": s, "|VaR|": abs(r.var), "|ES|": abs(r.es),
+         "Cumul. P&L": r.pnl, "Worst Day": r.worst_day}
+        for s, r in scenarios.items()
+    ]).sort_values("|VaR|", ascending=False)
+    st.dataframe(severity_data, use_container_width=True)
+
+    st.caption(
+        "**Finding (from notebooks):** Crisis-period VaR is 2–5x "
+        "higher than full-sample VaR. COVID-19 crash produced the "
+        "largest volatility spike in the 2010–2025 sample, with a "
+        "5.3x VaR multiplier. The worst auto-detected window captures "
+        "prolonged drawdowns that single-crash scenarios miss."
+    )
