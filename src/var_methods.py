@@ -149,7 +149,7 @@ def _mc_var_es(returns, alpha, horizon, garch_result, n_sim):
 
 
 def compute_portfolio_var_es(returns_df, weights, method, alpha, horizon=1,
-                              garch_results=None, dist="normal", n_sim=10000):
+                              dist="normal", n_sim=10000):
     """Compute VaR and ES for a portfolio of assets.
 
     Args:
@@ -158,7 +158,6 @@ def compute_portfolio_var_es(returns_df, weights, method, alpha, horizon=1,
         method: "historical", "parametric", or "mc".
         alpha: confidence level.
         horizon: forecast horizon.
-        garch_results: optional dict of {asset: GarchResult}.
         dist: distribution for parametric method.
         n_sim: simulations for MC method.
 

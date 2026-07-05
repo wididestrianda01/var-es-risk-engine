@@ -16,7 +16,6 @@ def make_garch_result(vol="EGARCH", dist="t"):
             "gamma[1]": -0.10,
         },
         cond_vol=np.full(100, 0.02),
-        forecasts=np.array([]),
         aic=-1200.0,
         aicc=-1199.0,
         bic=-1180.0,

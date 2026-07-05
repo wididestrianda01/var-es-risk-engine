@@ -26,7 +26,6 @@ class GarchResult:
     Attributes:
         params: Dictionary of fitted model parameters.
         cond_vol: Array of conditional volatility estimates.
-        forecasts: Array of volatility forecasts.
         aic: Akaike Information Criterion.
         aicc: Corrected AIC (AICc).
         bic: Bayesian Information Criterion.
@@ -38,7 +37,6 @@ class GarchResult:
 
     params: dict
     cond_vol: np.ndarray
-    forecasts: np.ndarray
     aic: float
     aicc: float
     bic: float
@@ -115,7 +113,6 @@ def fit_garch(
     return GarchResult(
         params=params,
         cond_vol=fit.conditional_volatility,
-        forecasts=np.array([]),
         aic=aic,
         aicc=aicc,
         bic=bic,
